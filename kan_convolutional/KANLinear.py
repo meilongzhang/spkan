@@ -24,7 +24,10 @@ class KANLinear(torch.nn.Module):
         self.grid_size = grid_size
         self.spline_order = spline_order
 
+        # calculate the step size of grid
         h = (grid_range[1] - grid_range[0]) / grid_size
+
+        # create a grid according specified in KAN paper, copied in_features times, ie one kernel per channel
         grid = (
             (
                 torch.arange(-spline_order, grid_size + spline_order + 1) * h
@@ -32,10 +35,13 @@ class KANLinear(torch.nn.Module):
             )
             .expand(in_features, -1)
             .contiguous()
-        )
+        ) 
         self.register_buffer("grid", grid)
 
+        
         self.base_weight = torch.nn.Parameter(torch.Tensor(out_features, in_features))
+
+        # shape out_features x in_features x grid_size + spline_order
         self.spline_weight = torch.nn.Parameter(
             torch.Tensor(out_features, in_features, grid_size + spline_order)
         )
@@ -91,16 +97,19 @@ class KANLinear(torch.nn.Module):
             self.grid
         )  # (in_features, grid_size + 2 * spline_order + 1)
         x = x.unsqueeze(-1)
+
+        # find which spline will be responsible to fitting the input value
         bases = ((x >= grid[:, :-1]) & (x < grid[:, 1:])).to(x.dtype)
+        
         for k in range(1, self.spline_order + 1):
             bases = (
-                (x - grid[:, : -(k + 1)])
-                / (grid[:, k:-1] - grid[:, : -(k + 1)])
-                * bases[:, :, :-1]
+                (x - grid[:, : -(k + 1)]) # distance from input to every grid point
+                / (grid[:, k:-1] - grid[:, : -(k + 1)]) # grid size
+                * bases[:, :, :-1] # which spline is responsible for fitting the input value
             ) + (
-                (grid[:, k + 1 :] - x)
-                / (grid[:, k + 1 :] - grid[:, 1:(-k)])
-                * bases[:, :, 1:]
+                (grid[:, k + 1 :] - x) # distance from every grid point to x
+                / (grid[:, k + 1 :] - grid[:, 1:(-k)]) # grid size
+                * bases[:, :, 1:] # which spline is responsible for fitting the input value
             )
 
         assert bases.size() == (
