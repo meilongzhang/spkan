@@ -162,7 +162,10 @@ class KANLinear(torch.nn.Module):
     def forward(self, x: torch.Tensor):
         assert x.dim() == 2 and x.size(1) == self.in_features
 
+        # residual activation function, base is the SiLU residual connection
         base_output = F.linear(self.base_activation(x), self.base_weight)
+
+        # spline is the actual splines of the layer
         spline_output = F.linear(
             self.b_splines(x).view(x.size(0), -1),
             self.scaled_spline_weight.view(self.out_features, -1),
