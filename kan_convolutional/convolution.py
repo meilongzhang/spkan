@@ -2,6 +2,7 @@
 import torch
 import numpy as np
 from typing import List, Tuple, Union
+from unfoldNd import UnfoldNd
 
 
 def calc_out_dims(matrix, kernel_side, stride, dilation, padding):
@@ -44,9 +45,10 @@ def kan_conv2d(matrix: Union[List[List[float]], np.ndarray], #but as torch tenso
     Returns:
         np.ndarray: 2D Feature map, i.e. matrix after convolution.
     """
-    h_out, w_out,batch_size,n_channels = calc_out_dims(matrix, kernel_side, stride, dilation, padding)
+    h_out, w_out,batch_size,n_channels = calc_out_dims(matrix, kernel_side, stride, dilation, padding) # calculate output dimensions
     
-    matrix_out = torch.zeros((batch_size,n_channels,h_out,w_out)).to(device)#estamos asumiendo que no existe la dimension de rgb
+    matrix_out = torch.zeros((batch_size,n_channels,h_out,w_out)).to(device) # instantiate the output feature map
+    #unfold = UnfoldNd(kernel_size=kernel_side, dilation=dilation[0], padding=padding[0], stride=stride[0]) # allows for 3d unfolding, but assumes stride, padding, dilation are equal along axes and kernel is square
     unfold = torch.nn.Unfold((kernel_side,kernel_side), dilation=dilation, padding=padding, stride=stride)
 
 
