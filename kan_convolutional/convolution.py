@@ -49,15 +49,16 @@ def kan_conv2d(matrix: Union[List[List[float]], np.ndarray], #but as torch tenso
     
     matrix_out = torch.zeros((batch_size,n_channels,h_out,w_out)).to(device) # instantiate the output feature map
     #unfold = UnfoldNd(kernel_size=kernel_side, dilation=dilation[0], padding=padding[0], stride=stride[0]) # allows for 3d unfolding, but assumes stride, padding, dilation are equal along axes and kernel is square
+    # function to generate all kernel positions in input matrix
     unfold = torch.nn.Unfold((kernel_side,kernel_side), dilation=dilation, padding=padding, stride=stride)
 
 
     for channel in range(n_channels):
         #print(matrix[:,channel,:,:].unsqueeze(1).shape)
-        conv_groups = unfold(matrix[:,channel,:,:].unsqueeze(1)).transpose(1, 2)
+        conv_groups = unfold(matrix[:,channel,:,:].unsqueeze(1)).transpose(1, 2) # all possible groups in input matrix
         #print("conv",conv_groups.shape)
         for k in range(batch_size):
-            matrix_out[k,channel,:,:] = kernel.forward(conv_groups[k,:,:]).reshape((h_out,w_out))
+            matrix_out[k,channel,:,:] = kernel.forward(conv_groups[k,:,:]).reshape((h_out,w_out)) # forward all groups through kernel, which is essentially KANLinear with kernel_size**2 inputs and 1 output
     return matrix_out
 
 def multiple_convs_kan_conv2d(matrix, #but as torch tensors. Kernel side asume q el kernel es cuadrado
