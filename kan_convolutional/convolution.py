@@ -25,6 +25,61 @@ def calc_out_dims(matrix, kernel_side, stride, dilation, padding):
     w_out = np.floor((m + 2 * padding[1] - kernel_side - (kernel_side - 1) * (dilation[1] - 1)) / stride[1]).astype(int) + 1
     return h_out,w_out,batch_size,n_channels
 
+def calc_out_dims_3d(matrix, kernel_side, stride, dilation, padding):
+    """
+    Calculate the output dimensions of the convolution operation.
+
+    Args:
+        matrix (batch_size, colors, n, m, p): 3D matrix to be convolved
+        kernel_side (int): kernel width, assuming kernel is square
+        stride (int): Tuple of the stride along axes. With the `(r, c)` stride we move on `r` pixels along rows and on `c` pixels along columns on each iteration. Defaults to (1, 1).
+        dilation (int): Tuple of the dilation along axes. With the `(r, c)` dilation we distancing adjacent pixels in kernel by `r` along rows and `c` along columns. Defaults to (1, 1).
+        padding (int): Tuple with number of rows and columns to be padded. Defaults to (0, 0).
+
+    Returns:
+        tuple: output feature map height, width, batch_size, number of channels
+    
+    """
+    batch_size,n_channels,n, m, p = matrix.shape
+    h_out = np.floor((n + 2 * padding - kernel_side - (kernel_side - 1) * (dilation - 1)) / stride).astype(int) + 1
+    w_out = np.floor((m + 2 * padding - kernel_side - (kernel_side - 1) * (dilation - 1)) / stride).astype(int) + 1
+    l_out = np.floor((p + 2 * padding - kernel_side - (kernel_side - 1) * (dilation - 1)) / stride).astype(int) + 1
+    return h_out,w_out,l_out,batch_size,n_channels
+
+def kan_conv3d(matrix: Union[List[List[List[float]]], np.ndarray], 
+             kernel, 
+             kernel_side: int,
+             stride: int = 1, 
+             dilation: int = 1, 
+             padding: int = 0,
+             device:str = "cuda"
+             ) -> torch.Tensor:
+    """Makes a 3D convolution with the kernel over matrix using defined stride, dilation and padding along axes.
+
+    Args:
+        matrix (batch_size, channels, n, m, p]): 2D matrix to be convolved.
+        kernel  (function]): 2D odd-shaped matrix (e.g. 3x3, 5x5, 13x9, etc.).
+        stride (Tuple[int, int], optional): Tuple of the stride along axes. With the `(r, c)` stride we move on `r` pixels along rows and on `c` pixels along columns on each iteration. Defaults to (1, 1).
+        dilation (Tuple[int, int], optional): Tuple of the dilation along axes. With the `(r, c)` dilation we distancing adjacent pixels in kernel by `r` along rows and `c` along columns. Defaults to (1, 1).
+        padding (Tuple[int, int], optional): Tuple with number of rows and columns to be padded. Defaults to (0, 0).
+
+    Returns:
+        np.ndarray: 2D Feature map, i.e. matrix after convolution.
+    """
+    h_out, w_out, l_out, batch_size,n_channels = calc_out_dims_3d(matrix, kernel_side, stride, dilation, padding) # calculate output dimensions
+    
+    matrix_out = torch.zeros((batch_size,n_channels,h_out,w_out,l_out)).to(device) # instantiate the output feature map
+    # function to generate all kernel positions in input matrix
+    unfold = UnfoldNd(kernel_size=kernel_side, dilation=dilation, padding=padding, stride=stride) # allows for 3d unfolding, but assumes stride, padding, dilation are equal along axes and kernel is square
+
+    for channel in range(n_channels):
+        #print(matrix[:,channel,:,:].unsqueeze(1).shape)
+        conv_groups = unfold(matrix[:,channel,:,:].unsqueeze(1)).transpose(1, 2) # all possible groups in input matrix
+        #print("conv",conv_groups.shape)
+        for k in range(batch_size):
+            matrix_out[k,channel,:,:] = kernel.forward(conv_groups[k,:,:]).reshape((h_out,w_out)) # forward all groups through kernel, which is essentially KANLinear with kernel_size**2 inputs and 1 output
+    return matrix_out
+
 def kan_conv2d(matrix: Union[List[List[float]], np.ndarray], #but as torch tensors. Kernel side asume q el kernel es cuadrado
              kernel, 
              kernel_side,
