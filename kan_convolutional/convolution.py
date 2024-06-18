@@ -5,10 +5,23 @@ from typing import List, Tuple, Union
 
 
 def calc_out_dims(matrix, kernel_side, stride, dilation, padding):
+    """
+    Calculate the output dimensions of the convolution operation.
+
+    Args:
+        matrix (batch_size, colors, n, m): 2D matrix to be convolved
+        kernel_side (int): kernel width, assuming kernel is square
+        stride (Tuple[int, int], optional): Tuple of the stride along axes. With the `(r, c)` stride we move on `r` pixels along rows and on `c` pixels along columns on each iteration. Defaults to (1, 1).
+        dilation (Tuple[int, int], optional): Tuple of the dilation along axes. With the `(r, c)` dilation we distancing adjacent pixels in kernel by `r` along rows and `c` along columns. Defaults to (1, 1).
+        padding (Tuple[int, int], optional): Tuple with number of rows and columns to be padded. Defaults to (0, 0).
+
+    Returns:
+        tuple: output feature map height, width, batch_size, number of channels
+    
+    """
     batch_size,n_channels,n, m = matrix.shape
     h_out = np.floor((n + 2 * padding[0] - kernel_side - (kernel_side - 1) * (dilation[0] - 1)) / stride[0]).astype(int) + 1
     w_out = np.floor((m + 2 * padding[1] - kernel_side - (kernel_side - 1) * (dilation[1] - 1)) / stride[1]).astype(int) + 1
-    b = [kernel_side // 2, kernel_side// 2]
     return h_out,w_out,batch_size,n_channels
 
 def kan_conv2d(matrix: Union[List[List[float]], np.ndarray], #but as torch tensors. Kernel side asume q el kernel es cuadrado
