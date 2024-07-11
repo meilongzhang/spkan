@@ -18,7 +18,7 @@ def grid_matmul(bases, weights, out_features):
         for j in range(len(weights[i])):
             sum += weights[i][j] * bases[j // len(bases[0])][j % len(bases[0])]
         
-        out_features[i] = sum
+        cuda.atomic.add(out_features, i, sum)
         
 @cuda.jit(device=True)
 def update_grid(x, grid, bases, temp, spline_order, spline_weights, out_channels, in_channels):
