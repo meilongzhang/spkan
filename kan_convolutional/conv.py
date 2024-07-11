@@ -16,7 +16,8 @@ from spconv.pytorch.utils import PointToVoxel, gather_features_by_pc_voxel_id
 import numpy as np
 import torch.nn.functional as F
 import torch
-from numba import jit
+from numba import cuda
+import cuda_tools
 array = np.array
 float32 = np.float32
 
@@ -132,7 +133,7 @@ class SparseKANConv3D(torch.nn.Module):
             self.grid[kernel_idx].copy_(new_grid.T)
             self.spline_weights[kernel_idx].data.copy_(self.curve2coeff(x, unreduced_spline_output, kernel_idx))
 
-
+      
       def b_splines(self, x: torch.Tensor, kernel_idx):
             x = x.unsqueeze(-1)
             bases = ((x >= self.grid[kernel_idx][:,:-1]) & (x < self.grid[kernel_idx][:,1:])).to(torch.float32)
@@ -147,9 +148,41 @@ class SparseKANConv3D(torch.nn.Module):
                     * bases[:,:,1:]
                 )
             return bases.contiguous()
+      """
+      
+      @cuda.jit
+      def b_splines(x, grid, spline_order, bases):
+            pos = cuda.grid(1)
+           
+            for k in range(1, spline_order + 1):
+                    bases[pos] = (
+                        (x[pos] - grid[:-(k+1)])
+                        / (grid[k:-1] - grid[:-(k+1)])
+                        * bases[:pos,:-1]
+                    ) + (
+                        (grid[k+1:] - x[pos])
+                        / (grid[k+1:] - grid[1:(-k)])
+                        * bases[:pos,1:]
+                    )
+            return bases
+      
+      @cuda.jit
+      def conv_forward(indice_pairs, indice_pair_num, features, out_features, spline_weights, base_weights, grid, grid_size, spline_order, grid_eps, base_activation):
+            kernel_idx = cuda.grid(1) # kernel_idx
+            iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
+            inp = iopairs[0, :]
+            out = iopairs[1, :]
+            x = features[inp]
+            # grid update
+            # bases
+            result = np.matmul()
+            cuda.atomic.add(out_features, out, result)
 
 
-      def forward(self, x: spconv.SparseConvTensor):
+            return
+      """ 
+
+      def forward(self, x: spconv.SparseConvTensor, cud = True):
             ## Currently supporting only sparseconv tensors
 
             ## Calculate input output pairs
@@ -165,6 +198,12 @@ class SparseKANConv3D(torch.nn.Module):
                                                                          self.subm,
                                                                          self.transposed)
 
+            print('indice_pairs', indice_pairs.shape)
+            print('indice_pair_num', indice_pair_num.shape)
+            print('grid', self.grid.shape)
+            print('features', x.features.shape)
+            print('splineweights', self.spline_weights.shape)
+            print('baseweights', self.base_weights.shape)
             ## Copy and calculate some sparse tensor attributes
             out_tensor = x.shadow_copy()
             out_spatial_shape = ops.get_conv_output_size(
@@ -172,23 +211,46 @@ class SparseKANConv3D(torch.nn.Module):
             indice_dict = x.indice_dict.copy()
             out_features = torch.zeros((outids.size(0), self.out_channels), device=self.device)
 
+            print('out_features', out_features.shape)
+            features = x.features
             ## Do the actual convolution
-            ## Proxy convolution Function
-            for kernel_idx in range(27):
-                ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
-                iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
+            if cud:
+                 assert self.device == torch.device('cuda')
+                 threadsperblock = self.num_kernel_elems
+                 blockspergrid = 1
+                 activated = self.base_activation(features)
+                 result = torch.randn(27, 3, 12).to(device)
+                 temp = torch.randn(3, 12).to(device)
 
-                inp = iopairs[0, :]
-                out = iopairs[1, :]
-                x = features[inp]#[:, :, None]
-                self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
-                bases = self.b_splines(x, kernel_idx)
-                #print(bases.shape)
-                out_features[out] += (
-                    F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
-                    F.linear(self.base_activation(x), self.base_weights[kernel_idx])
-                ).squeeze(0)
+                 ip = cuda.as_cuda_array(indice_pairs)
+                 ipn = cuda.as_cuda_array(indice_pair_num)
+                 gr = cuda.as_cuda_array(self.grid)
+                 fe = cuda.as_cuda_array(features)
+                 sw = cuda.as_cuda_array(self.spline_weights.detach())
+                 bw = cuda.as_cuda_array(self.base_weights.detach())
+                 of = cuda.as_cuda_array(out_features.detach())
+                 ac = cuda.as_cuda_array(activated)
+                 res = cuda.as_cuda_array(result)
+                 temp = cuda.as_cuda_array(temp)
 
+                 cuda_tools.test_conv[blockspergrid, threadsperblock](ip, ipn, fe, ac, of, sw, bw, gr, self.grid_size, self.spline_order, self.grid_eps, res, temp)
+                 out_features = torch.tensor(of.copy_to_host())
+            else:
+                ## Proxy convolution Function
+                for kernel_idx in range(27):
+                    ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
+                    iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
+
+                    inp = iopairs[0, :]
+                    out = iopairs[1, :]
+                    x = features[inp]#[:, :, None]
+                    self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
+                    bases = self.b_splines(x, kernel_idx)
+                    #print(bases.shape)
+                    out_features[out] += (
+                        F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
+                        F.linear(self.base_activation(x), self.base_weights[kernel_idx])
+                    ).squeeze(0)
 
 
                 #for i in range(len(reee[0])): # do this for all valid input-output pairs of kernel element
@@ -251,7 +313,7 @@ class SparseKANConv3D(torch.nn.Module):
                     """
                     
                     #out_features[out] += (F.linear(bases.view(1, -1), spline_weights[kernel_idx]).squeeze(0) + F.linear(self.base_activation(x.T), self.base_weights[kernel_idx]))[0]
-
+            print(out_features)
             out_tensor = out_tensor.replace_feature(out_features)
             out_tensor.indices = outids
             out_tensor.indice_dict = indice_dict
