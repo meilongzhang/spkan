@@ -148,41 +148,9 @@ class SparseKANConv3D(torch.nn.Module):
                     * bases[:,:,1:]
                 )
             return bases.contiguous()
-      """
-      
-      @cuda.jit
-      def b_splines(x, grid, spline_order, bases):
-            pos = cuda.grid(1)
-           
-            for k in range(1, spline_order + 1):
-                    bases[pos] = (
-                        (x[pos] - grid[:-(k+1)])
-                        / (grid[k:-1] - grid[:-(k+1)])
-                        * bases[:pos,:-1]
-                    ) + (
-                        (grid[k+1:] - x[pos])
-                        / (grid[k+1:] - grid[1:(-k)])
-                        * bases[:pos,1:]
-                    )
-            return bases
-      
-      @cuda.jit
-      def conv_forward(indice_pairs, indice_pair_num, features, out_features, spline_weights, base_weights, grid, grid_size, spline_order, grid_eps, base_activation):
-            kernel_idx = cuda.grid(1) # kernel_idx
-            iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
-            inp = iopairs[0, :]
-            out = iopairs[1, :]
-            x = features[inp]
-            # grid update
-            # bases
-            result = np.matmul()
-            cuda.atomic.add(out_features, out, result)
 
 
-            return
-      """ 
-
-      def forward(self, x: spconv.SparseConvTensor, cud = True):
+      def forward(self, x: spconv.SparseConvTensor, cud = False):
             ## Currently supporting only sparseconv tensors
 
             ## Calculate input output pairs
@@ -346,4 +314,3 @@ if __name__ == '__main__':
     kan_conv = SparseKANConv3D(3, 3, 5, device=device)
     # Perform a forward pass
     out = kan_conv(test_sparse)
-    # Check if the output is correct
