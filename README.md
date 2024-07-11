@@ -1,4 +1,4 @@
-# Convolutional Kolmogorov-Arnold Network (CKAN) 
+# SPKAN - Sparse Kanvolutions (Sparse Convolutions with Kolmogorov-Arnold Network)
 ### Introducing Convolutional KAN Networks!
 This project extends the idea of the innovative architecture of Kolmogorov-Arnold Networks (KAN) to the Convolutional Layers, changing the classic linear transformation of the convolution to learnable non linear activations in each pixel. 
 ### Authors
