@@ -1,5 +1,4 @@
 from numba import cuda
-import numpy as np
 
 @cuda.jit(device=True)
 def base_matmul(bases, weights, out_features):

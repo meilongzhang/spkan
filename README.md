@@ -13,8 +13,15 @@ The original implementation of KAN is available [here](https://github.com/KindXi
 The original paper of the KAN is available [here](https://arxiv.org/pdf/2404.19756).
 
 # Installation
-Currently only tested on Python 3.9
+To use as package: currently only tested on Python 3.9
 
 ```bash
 pip install spkan
+```
+
+To edit: 
+Use python==3.9 torch>=2.3.0 and spconv-cu118
+
+```bash
+git clone https://github.com/meilongzhang/spkan.git
 ```
