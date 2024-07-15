@@ -2,6 +2,8 @@
 ### Introducing Sparse Convolutional KANs
 This project extends the idea of the innovative architecture of Kolmogorov-Arnold Networks (KAN) to sparse convolutions.
 
+view the PyPI [here](https://pypi.org/project/spkan/)
+
 ### Authors
 This repository was made by:
  - Mellon Zhang | meilongz@gatech.edu | [LinkedIn](https://www.linkedin.com/in/alexanderbodner/)
