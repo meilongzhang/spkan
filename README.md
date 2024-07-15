@@ -1,5 +1,5 @@
-# SPKAN - Sparse Kanvolutions (Sparse Convolutions with Kolmogorov-Arnold Network)
-### Introducing Convolutional KAN Networks!
+# spkan - Sparse Convolutions with Kolmogorov-Arnold Network
+### Introducing Sparse Convolutional KANs
 This project extends the idea of the innovative architecture of Kolmogorov-Arnold Networks (KAN) to sparse convolutions.
 
 ### Authors
