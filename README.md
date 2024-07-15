@@ -6,7 +6,7 @@ view the PyPI [here](https://pypi.org/project/spkan/)
 
 ### Authors
 This repository was made by:
- - Mellon Zhang | meilongz@gatech.edu | [LinkedIn](https://www.linkedin.com/in/alexanderbodner/)
+ - Mellon Zhang | meilongz@gatech.edu | [LinkedIn](https://www.linkedin.com/in/meilongzhang/)
 
 ### Credits
 This repository builds upon an implementation of Convolutional-KANs which is available [here](https://github.com/AntonioTepsich/Convolutional-KANs).
