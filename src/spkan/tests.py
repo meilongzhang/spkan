@@ -70,6 +70,11 @@ class CudaTest(unittest.TestCase):
             assert(cout.spatial_shape == nout.spatial_shape)
             assert(cout.batch_size == nout.batch_size)
 
+    def test_kanv(self):
+        self.kan_conv = SparseKANConv3D(3, 3, 7, kernel_size=4, stride=2, device=self.device, use_numba=False)
+        cout = self.kan_conv(self.test_input)
+        assert(cout.features.shape[1] == 7)
+
 
 if __name__ == '__main__':
     unittest.main()

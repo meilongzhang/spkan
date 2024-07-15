@@ -1,3 +1,21 @@
+Metadata-Version: 2.1
+Name: spkan
+Version: 0.0.1
+Summary: A drop-in replacement for sparse convolutions using Kolmogorov-Arnold Networks
+Author-email: "Mellon M. Zhang" <meilongz@gatech.edu>
+Project-URL: Homepage, https://github.com/meilongzhang/spkan
+Project-URL: Issues, https://github.com/meilongzhang/spkan/issues
+Keywords: kan,sparse,convolutions,kolmogorov-arnold,submanifold
+Classifier: Programming Language :: Python :: 3.9
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: torch
+Requires-Dist: numpy
+Requires-Dist: spconv
+
 # SPKAN - Sparse Kanvolutions (Sparse Convolutions with Kolmogorov-Arnold Network)
 ### Introducing Convolutional KAN Networks!
 This project extends the idea of the innovative architecture of Kolmogorov-Arnold Networks (KAN) to sparse convolutions.
