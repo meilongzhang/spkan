@@ -8,12 +8,26 @@ import numpy as np
 import torch.nn.functional as F
 import torch
 from numba import cuda
-import cuda_tools
+from spconv.pytorch.modules import SparseModule
+
+if __name__ == "__main__" and __package__ is None:
+    import os
+    import sys
+    currentdir = os.path.dirname(os.path.abspath(__file__))
+    parentdir = os.path.dirname(currentdir)
+    sys.path.insert(0, parentdir)
+    import cuda_tools
+else:
+    try:
+        from spkan import cuda_tools
+    except:
+         import cuda_tools
+
 array = np.array
 float32 = np.float32
 
 
-class SparseKANConv3D(torch.nn.Module):
+class SparseKANConv3d(SparseModule):
       """
       A pure Pytorch version of SparseKANConv3D. Offers Sparse 3D Convolution with Kolmogorov-Arnold Networks
       """
@@ -38,7 +52,7 @@ class SparseKANConv3D(torch.nn.Module):
                    base_activation = torch.nn.SiLU,
                    device='cpu',
                    use_numba = False):
-            super(SparseKANConv3D, self).__init__()
+            super(SparseKANConv3d, self).__init__()
             self.in_channels = in_channels
             self.out_channels = out_channels
 
@@ -303,13 +317,17 @@ class SparseKANConv3D(torch.nn.Module):
                     
                     #out_features[out] += (F.linear(bases.view(1, -1), spline_weights[kernel_idx]).squeeze(0) + F.linear(self.base_activation(x.T), self.base_weights[kernel_idx]))[0]
 
+            #print("return of layer", type(out_tensor))
             out_tensor = out_tensor.replace_feature(out_features)
             out_tensor.indices = outids
             out_tensor.indice_dict = indice_dict
             out_tensor.spatial_shape = out_spatial_shape
+            #print(out_tensor.batch_size)
+            #out_tensor.batch_size = x.batch_size
+            
             return out_tensor
       
-class SubmKANConv3D(SparseKANConv3D):
+class SubMKANConv3d(SparseKANConv3d):
      def __init__(self,
                    ndim: int,
                    in_channels: int,
@@ -329,7 +347,7 @@ class SubmKANConv3D(SparseKANConv3D):
                    base_activation = torch.nn.SiLU,
                    device='cpu',
                    use_numba = False):
-            super(SubmKANConv3D, self).__init__(ndim, 
+            super(SubMKANConv3d, self).__init__(ndim, 
                                                 in_channels, 
                                                 out_channels, 
                                                 kernel_size, 
@@ -371,6 +389,6 @@ if __name__ == '__main__':
     indices = indices.to(device)
     test_sparse = spconv.SparseConvTensor(features, indices, spatial_shape, batch_size)
     # Create a SparseKANConv3D
-    kan_conv = SparseKANConv3D(3, 3, 5, device=device, subm=True)
+    kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=True)
     # Perform a forward pass
     out = kan_conv(test_sparse)

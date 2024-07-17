@@ -3,7 +3,8 @@ import torch
 from spconv.pytorch.utils import PointToVoxel
 import numpy as np
 import spconv.pytorch as spconv
-from conv import SparseKANConv3D
+from spconv.pytorch.core import SparseConvTensor
+from conv import SparseKANConv3d
 import random
 
 def reset_random(seed_number):
@@ -21,13 +22,21 @@ class CudaTest(unittest.TestCase):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.reset_input_data(0)
-        self.test_input = spconv.SparseConvTensor(self.features, self.indices, self.spatial_shape, self.batch_size)
+        self.test_input = SparseConvTensor(self.features, self.indices, self.spatial_shape, self.batch_size)
+
+    def tearDown(self):
         """
-        reset_random(0)
-        self.kan_conv = SparseKANConv3D(3, 3, 5, device=self.device, use_numba=False)
-        reset_random(0)
-        self.kan_numba = SparseKANConv3D(3, 3, 5, device=self.device, use_numba=True)
+        self.test_input.dispose()
+        self.kan_conv.dispose()
+        if self.kan_numba:
+            self.kan_numba.dispose()
+        self.spatial_shape.dispose()
+        self.features.dispose()
+        self.indices.dispose()
+        self.batch_size.dispose()
         """
+        return
+
 
     def reset_input_data(self, num):
         reset_random(num)
@@ -50,31 +59,43 @@ class CudaTest(unittest.TestCase):
 
     def reset_weights(self, num):
         reset_random(num)
-        self.kan_conv = SparseKANConv3D(3, 3, 5, device=self.device, use_numba=False)
+        self.kan_conv = SparseKANConv3d(3, 3, 5, device=self.device, use_numba=False)
         reset_random(num)
-        self.kan_numba = SparseKANConv3D(3, 3, 5, device=self.device, use_numba=True)
+        self.kan_numba = SparseKANConv3d(3, 3, 5, device=self.device, use_numba=True)
 
     def test_bsplines(self):
+        print("---------- test_bsplines ----------")
         for i in range(5):
-            self.reset_weights(i)
+            with self.subTest(i=i):
+                self.reset_weights(i)
 
-            cout = self.kan_conv(self.test_input)
-            nout = self.kan_numba(self.test_input)
+                cout = self.kan_conv(self.test_input)
+                nout = self.kan_numba(self.test_input)
 
-            for i in range(len(cout.features)):
-                for j in range(len(cout.features[0])):
-                    self.assertAlmostEqual(cout.features[i][j].item(), nout.features[i][j].item(), 1, f'features are not equal: {cout.features[i][j].item()}, {nout.features[i][j].item()}')
-                for j in range(len(cout.indices[0])):
-                    self.assertEqual(cout.indices[i][j].item(), nout.indices[i][j].item(), f'indices are not equal: {cout.indices[i][j].item()}, {nout.indices[i][j].item()}')
+                for i in range(len(cout.features)):
+                    for j in range(len(cout.features[0])):
+                        self.assertAlmostEqual(cout.features[i][j].item(), nout.features[i][j].item(), 1, f'features are not equal: {cout.features[i][j].item()}, {nout.features[i][j].item()}')
+                    for j in range(len(cout.indices[0])):
+                        self.assertEqual(cout.indices[i][j].item(), nout.indices[i][j].item(), f'indices are not equal: {cout.indices[i][j].item()}, {nout.indices[i][j].item()}')
 
-            assert(cout.spatial_shape == nout.spatial_shape)
-            assert(cout.batch_size == nout.batch_size)
+                self.assertEqual(cout.spatial_shape, nout.spatial_shape)
+                self.assertEqual(cout.batch_size, nout.batch_size)
 
     def test_kanv(self):
-        self.kan_conv = SparseKANConv3D(3, 3, 7, kernel_size=4, stride=2, device=self.device, use_numba=False)
+        print("---------- test_kanv ----------")
+        self.kan_conv = SparseKANConv3d(3, 3, 7, kernel_size=4, stride=2, device=self.device, use_numba=False)
         cout = self.kan_conv(self.test_input)
-        assert(cout.features.shape[1] == 7)
-
+        self.assertEqual(cout.features.shape[1], 7)
+    
+    def test_large_kanv(self):
+        print("---------- test_large_kanv ----------")
+        self.kan_conv = spconv.SparseSequential(
+            SparseKANConv3d(3, 3, 64, kernel_size=4, stride=2, device=self.device, use_numba=False),
+            SparseKANConv3d(3, 64, 128, kernel_size=4, stride=2, padding=1, device=self.device, use_numba=False)
+        )
+        cout = self.kan_conv(self.test_input)
+        self.assertEqual(cout.features.shape[1], 128)
+    
 
 if __name__ == '__main__':
     unittest.main()
