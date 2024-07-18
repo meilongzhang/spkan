@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import torch
 from numba import cuda
 from spconv.pytorch.modules import SparseModule
+from typing import List, Optional, Tuple, Union
 
 if __name__ == "__main__" and __package__ is None:
     import os
@@ -36,14 +37,14 @@ class SparseKANConv3d(SparseModule):
                    ndim: int,
                    in_channels: int,
                    out_channels: int,
-                   kernel_size=3,
-                   stride=1,
-                   padding=0,
-                   dilation=1,
+                   kernel_size: Union[int, List[int], Tuple[int, ...]] = 3,
+                   stride: Union[int, List[int], Tuple[int, ...]] = 1,
+                   padding: Union[int, List[int], Tuple[int, ...]] = 0,
+                   dilation: Union[int, List[int], Tuple[int, ...]] = 1,
                    groups=1,
                    bias: bool = False,
                    subm: bool = False,
-                   output_padding=0,
+                   output_padding: Union[int, List[int], Tuple[int, ...]] = 0,
                    transposed: bool = False,
                    grid_size=5,
                    spline_order=3,
@@ -56,11 +57,12 @@ class SparseKANConv3d(SparseModule):
             self.in_channels = in_channels
             self.out_channels = out_channels
 
-            self.kernel_size = expand_nd(ndim, kernel_size)
-            self.stride = expand_nd(ndim, stride)
-            self.padding = expand_nd(ndim, padding)
-            self.dilation = expand_nd(ndim, dilation)
-            self.output_padding = expand_nd(ndim, output_padding)
+            self.kernel_size = expand_nd(ndim, kernel_size) if type(kernel_size) is int else kernel_size
+            self.stride = expand_nd(ndim, stride) if type(stride) is int else stride
+            self.padding = expand_nd(ndim, padding) if type(padding) is int else padding
+            self.dilation = expand_nd(ndim, dilation) if type(dilation) is int else dilation
+            self.output_padding = expand_nd(ndim, output_padding) if type(output_padding) is int else output_padding
+
             self.num_kernel_elems = math.prod(self.kernel_size)
 
             self.subm = subm
@@ -72,6 +74,7 @@ class SparseKANConv3d(SparseModule):
             self.base_activation = base_activation()
             self.grid_eps = grid_eps
             self.cud = use_numba
+            self.bias = bias
 
             num_elements = self.num_kernel_elems * in_channels
             h = (grid_range[1] - grid_range[0]) / grid_size
@@ -222,8 +225,8 @@ class SparseKANConv3d(SparseModule):
                  threadsperblock = self.num_kernel_elems
                  blockspergrid = 1
                  activated = self.base_activation(features)
-                 result = torch.randn(27, 3, 12).to(self.device)
-                 temp = torch.randn(3, 12).to(self.device)
+                 result = torch.randn(self.num_kernel_elems, self.in_channels, 12).to(self.device)
+                 temp = torch.randn(self.in_channels, 12).to(self.device)
 
                  ip = cuda.as_cuda_array(indice_pairs)
                  ipn = cuda.as_cuda_array(indice_pair_num)
@@ -240,7 +243,7 @@ class SparseKANConv3d(SparseModule):
                  out_features = torch.tensor(of.copy_to_host()).to(self.device)
             else:
                 ## Proxy convolution Function
-                for kernel_idx in range(27):
+                for kernel_idx in range(self.num_kernel_elems):
                     ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
                     iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
 
@@ -326,6 +329,18 @@ class SparseKANConv3d(SparseModule):
             #out_tensor.batch_size = x.batch_size
             
             return out_tensor
+      
+      def __repr__(self):
+        # Customize this method to include all relevant details
+        return (f'{self.__class__.__name__}('
+                f'{self.in_channels}, '
+                f'{self.out_channels}, '
+                f'kernel_size={self.kernel_size}, '
+                f'stride={self.stride}, '
+                f'padding={self.padding}, '
+                f'dilation={self.dilation}, '
+                f'output_padding={self.output_padding}, '
+                f'bias={self.bias})')
       
 class SubMKANConv3d(SparseKANConv3d):
      def __init__(self,

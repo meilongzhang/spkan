@@ -1,22 +1,20 @@
 import torch.nn as nn
 import spconv.pytorch as spconv
 
-
-if __name__ == "__main__" and __package__ is None:
+try:
+    from .. import conv as kanv
+except:
     import os
     import sys
     currentdir = os.path.dirname(os.path.abspath(__file__))
     parentdir = os.path.dirname(currentdir)
     sys.path.insert(0, parentdir)
     import conv as kanv
-else:
-    print('else')
 
 
 class SECOND_NECK(nn.Module):
-    def __init__(self):
-        super(SECOND_NECK, self).__init__()
-        
+    def __init__(self):   
+        super(SECOND_NECK, self).__init__()     
         self.conv_input = self._block(manifold=True, 
                                       in_channels=4, 
                                       out_channels=16, 
@@ -120,7 +118,7 @@ class SECOND_NECK(nn.Module):
                 out_channels=64,
                 kernel_size=3,
                 stride=2,
-                padding=1,
+                padding=[0,1,1],
                 dilation=1,
                 output_padding=0,
                 use_numba=False
@@ -161,8 +159,8 @@ class SECOND_NECK(nn.Module):
             manifold=False,
             in_channels=64,
             out_channels=128,
-            kernel_size=3,
-            stride=2,
+            kernel_size=[3,1,1],
+            stride=[2,1,1],
             padding=0,
             dilation=1,
             output_padding=0,

@@ -6,6 +6,9 @@ import spconv.pytorch as spconv
 from spconv.pytorch.core import SparseConvTensor
 from conv import SparseKANConv3d
 import random
+from modules import second_neck
+
+#from modules import second_neck
 
 def reset_random(seed_number):
         random.seed(seed_number)
@@ -92,6 +95,15 @@ class CudaTest(unittest.TestCase):
         self.kan_conv = spconv.SparseSequential(
             SparseKANConv3d(3, 3, 64, kernel_size=4, stride=2, device=self.device, use_numba=False),
             SparseKANConv3d(3, 64, 128, kernel_size=4, stride=2, padding=1, device=self.device, use_numba=False)
+        )
+        cout = self.kan_conv(self.test_input)
+        self.assertEqual(cout.features.shape[1], 128)
+
+    def test_nonsymmetric(self):
+        print("---------- test_nonsymmetric ----------")
+        self.kan_conv = spconv.SparseSequential(
+            SparseKANConv3d(3, 3, 64, kernel_size=3, stride=1, padding=1, device=self.device, use_numba=False),
+            SparseKANConv3d(3, 64, 128, kernel_size=[3, 1, 1], stride=[2, 1, 1], device=self.device, use_numba=False)
         )
         cout = self.kan_conv(self.test_input)
         self.assertEqual(cout.features.shape[1], 128)
