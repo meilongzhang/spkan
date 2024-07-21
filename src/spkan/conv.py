@@ -10,6 +10,9 @@ import torch
 from numba import cuda
 from spconv.pytorch.modules import SparseModule
 from typing import List, Optional, Tuple, Union
+from functools import reduce
+import operator
+import sys
 
 if __name__ == "__main__" and __package__ is None:
     import os
@@ -27,6 +30,10 @@ else:
 array = np.array
 float32 = np.float32
 
+if sys.version_info[1] < 8:
+    __PYTHON38__ = False
+else:
+    __PYTHON38__ = True
 
 class SparseKANConv3d(SparseModule):
       """
@@ -63,7 +70,10 @@ class SparseKANConv3d(SparseModule):
             self.dilation = expand_nd(ndim, dilation) if type(dilation) is int else dilation
             self.output_padding = expand_nd(ndim, output_padding) if type(output_padding) is int else output_padding
 
-            self.num_kernel_elems = math.prod(self.kernel_size)
+            if __PYTHON38__:
+                self.num_kernel_elems = math.prod(self.kernel_size)
+            else:
+                self.num_kernel_elems = reduce(operator.mul, self.kernel_size)
 
             self.subm = subm
             self.transposed = transposed
@@ -249,14 +259,25 @@ class SparseKANConv3d(SparseModule):
 
                     inp = iopairs[0, :]
                     out = iopairs[1, :]
-                    x = features[inp]#[:, :, None]
+                    if not __PYTHON38__:
+                        x = features[inp.long()]
+                        bases = self.b_splines(x, kernel_idx)
+                        out_features[out.long()] += (
+                            F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
+                            F.linear(self.base_activation(x), self.base_weights[kernel_idx])
+                        ).squeeze(0)
+
+                    else:
+                        x = features[inp]#[:, :, None]
+                        bases = self.b_splines(x, kernel_idx)
+                        out_features[out] += (
+                            F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
+                            F.linear(self.base_activation(x), self.base_weights[kernel_idx])
+                        ).squeeze(0)
                     #self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
-                    bases = self.b_splines(x, kernel_idx)
+                    
                     #print(bases.shape)
-                    out_features[out] += (
-                        F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
-                        F.linear(self.base_activation(x), self.base_weights[kernel_idx])
-                    ).squeeze(0)
+                    
 
 
                 #for i in range(len(reee[0])): # do this for all valid input-output pairs of kernel element

@@ -4,15 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spkan"
-version = "0.0.1a4"
+version = "0.0.1a5"
 authors = [
   { name="Mellon M. Zhang", email="meilongz@gatech.edu" },
 ]
 description = "A drop-in replacement for sparse convolutions using Kolmogorov-Arnold Networks"
 readme = "README.md"
-requires-python = ">=3.9.7"
+requires-python = ">=3.7"
 classifiers = [
     "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.7",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
