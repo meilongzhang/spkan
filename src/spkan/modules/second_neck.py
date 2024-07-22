@@ -1,5 +1,6 @@
 import torch.nn as nn
 import spconv.pytorch as spconv
+from torch import Tensor
 
 try:
     from .. import conv as kanv
@@ -13,8 +14,9 @@ except:
 
 
 class SECOND_NECK(nn.Module):
-    def __init__(self):   
-        super(SECOND_NECK, self).__init__()     
+    def __init__(self, device):   
+        super(SECOND_NECK, self).__init__()   
+        self.device = device  
         self.conv_input = self._block(manifold=True, 
                                       in_channels=4, 
                                       out_channels=16, 
@@ -167,19 +169,45 @@ class SECOND_NECK(nn.Module):
             use_numba=False
         )
 
+
     def _block(self, manifold, in_channels, out_channels, kernel_size, stride, padding, dilation, output_padding, use_numba):
         if manifold:
             return spconv.SparseSequential(
-                kanv.SubMKANConv3d(ndim=3, in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, use_numba=use_numba),
+                kanv.SubMKANConv3d(ndim=3, in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, use_numba=use_numba, device=self.device),
                 nn.BatchNorm1d(out_channels, eps=0.001, momentum=0.01, affine=True, track_running_stats=True),
                 nn.ReLU(inplace=True)
             )
         else:
             return spconv.SparseSequential(
-                kanv.SparseKANConv3d(ndim=3, in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, use_numba=use_numba),
+                kanv.SparseKANConv3d(ndim=3, in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, use_numba=use_numba, device=self.device),
                 nn.BatchNorm1d(out_channels, eps=0.001, momentum=0.01, affine=True, track_running_stats=True),
                 nn.ReLU(inplace=True)
             )
+        
+    def forward(self, voxel_features: Tensor, coors: Tensor,
+                batch_size: int):
+        coors = coors.int()
+        input_sp_tensor = spconv.SparseConvTensor(voxel_features, coors,
+                                           self.sparse_shape, batch_size)
+        x = self.conv_input(input_sp_tensor)
+
+        encode_features = []
+        for encoder_layer in self.encoder_layers:
+            x = encoder_layer(x)
+            encode_features.append(x)
+
+        # for detection head
+        # [200, 176, 5] -> [200, 176, 2]
+        out = self.conv_out(encode_features[-1])
+        spatial_features = out.dense()
+
+        N, C, D, H, W = spatial_features.shape
+        spatial_features = spatial_features.view(N, C * D, H, W)
+
+        if self.return_middle_feats:
+            return spatial_features, encode_features
+        else:
+            return spatial_features
 
 if __name__ == '__main__':
     model = SECOND_NECK()

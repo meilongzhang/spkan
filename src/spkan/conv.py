@@ -259,21 +259,21 @@ class SparseKANConv3d(SparseModule):
 
                     inp = iopairs[0, :]
                     out = iopairs[1, :]
-                    if not __PYTHON38__:
-                        x = features[inp.long()]
-                        bases = self.b_splines(x, kernel_idx)
-                        out_features[out.long()] += (
-                            F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
-                            F.linear(self.base_activation(x), self.base_weights[kernel_idx])
-                        ).squeeze(0)
+                    x = features[inp.long()]
+                    bases = self.b_splines(x, kernel_idx)
+                    out_features[out.long()] += (
+                        F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
+                        F.linear(self.base_activation(x), self.base_weights[kernel_idx])
+                    ).squeeze(0)
 
-                    else:
-                        x = features[inp]#[:, :, None]
-                        bases = self.b_splines(x, kernel_idx)
-                        out_features[out] += (
-                            F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
-                            F.linear(self.base_activation(x), self.base_weights[kernel_idx])
-                        ).squeeze(0)
+                    """
+                    x = features[inp]#[:, :, None]
+                    bases = self.b_splines(x, kernel_idx)
+                    out_features[out] += (
+                        F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
+                        F.linear(self.base_activation(x), self.base_weights[kernel_idx])
+                    ).squeeze(0)
+                    """
                     #self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
                     
                     #print(bases.shape)
@@ -417,6 +417,7 @@ if __name__ == '__main__':
     pc_th = torch.from_numpy(pc)
     voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
 
+    print(voxels.shape)
     indices = torch.cat((torch.zeros(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
     features = torch.max(voxels, dim=1)[0]
     spatial_shape = [1600, 1600, 80]
@@ -424,6 +425,9 @@ if __name__ == '__main__':
     features = features.to(device)
     indices = indices.to(device)
     test_sparse = spconv.SparseConvTensor(features, indices, spatial_shape, batch_size)
+    print(f"sparse input features shape: {test_sparse.features.shape}")
+    print(f"sparse input indices shape: {test_sparse.indices.shape}")
+    print(test_sparse.indices)
     # Create a SparseKANConv3D
     kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=True)
     # Perform a forward pass

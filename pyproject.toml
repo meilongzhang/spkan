@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spkan"
-version = "0.0.1a5"
+version = "0.0.1a7"
 authors = [
   { name="Mellon M. Zhang", email="meilongz@gatech.edu" },
 ]
@@ -17,11 +17,6 @@ classifiers = [
     "Programming Language :: Python :: 3.7",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
-]
-dependencies = [
-    "torch",
-    "numpy",
-    "spconv"
 ]
 keywords = ['kan', 'sparse', 'convolutions', 'kolmogorov-arnold', 'submanifold']
 

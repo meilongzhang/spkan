@@ -15,7 +15,11 @@ The original implementation of KAN is available [here](https://github.com/KindXi
 The original paper of the KAN is available [here](https://arxiv.org/pdf/2404.19756).
 
 # Installation
-To use as package: currently only tested on Python 3.9
+To use as package: 
+currently compatible with:
+Python: 3.7/3.8/3.9
+CUDA: 11.3/11.8
+
 
 ```bash
 pip install spkan

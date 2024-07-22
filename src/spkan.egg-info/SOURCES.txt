@@ -11,6 +11,5 @@ src/spkan/tests.py
 src/spkan.egg-info/PKG-INFO
 src/spkan.egg-info/SOURCES.txt
 src/spkan.egg-info/dependency_links.txt
-src/spkan.egg-info/requires.txt
 src/spkan.egg-info/top_level.txt
 src/spkan/modules/second_neck.py

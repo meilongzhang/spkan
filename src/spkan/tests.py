@@ -19,8 +19,7 @@ def reset_random(seed_number):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
-class CudaTest(unittest.TestCase):
-
+class BaseTest(unittest.TestCase):
     def setUp(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -66,6 +65,7 @@ class CudaTest(unittest.TestCase):
         reset_random(num)
         self.kan_numba = SparseKANConv3d(3, 3, 5, device=self.device, use_numba=True)
 
+    @unittest.skipIf(torch.cuda.is_available() == False, "CUDA not available")
     def test_bsplines(self):
         print("---------- test_bsplines ----------")
         for i in range(5):
@@ -107,7 +107,54 @@ class CudaTest(unittest.TestCase):
         )
         cout = self.kan_conv(self.test_input)
         self.assertEqual(cout.features.shape[1], 128)
-    
+
+
+class MultiBatchTest(unittest.TestCase):
+    def setUp(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        reset_random(0)
+        self.reset_input_data(2)
+        self.test_input = SparseConvTensor(self.features, self.indices, self.spatial_shape, self.batch_size)
+
+    def reset_input_data(self, num):
+        gen = PointToVoxel(
+            vsize_xyz=[0.1, 0.1, 0.1],
+            coors_range_xyz=[-80, -80, -2, 80, 80, 6],
+            num_point_features=3,
+            max_num_voxels=5000,
+            max_num_points_per_voxel=5)
+        pc = np.random.uniform(-10, 10, size=[1000, 3])
+        pc_th = torch.from_numpy(pc)
+        voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
+
+        indices = torch.cat((torch.zeros(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
+        features = torch.max(voxels, dim=1)[0]
+        
+        pc = np.random.uniform(-10, 10, size=[1000, 3])
+        pc_th = torch.from_numpy(pc)
+        voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
+
+        indices1 = torch.cat((torch.ones(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
+        features1 = torch.max(voxels, dim=1)[0]
+
+        indices_full = torch.cat((indices, indices1), dim=0)
+        features_full = torch.cat((features, features1), dim=0)
+        
+        self.spatial_shape = [1600, 1600, 80]
+        self.batch_size = num
+        self.features = features_full.to(self.device)
+        self.indices = indices_full.to(self.device)
+
+
+
+    def test_base(self):
+        print("---------- test_base ----------")
+        self.kan_conv = SparseKANConv3d(3, 3, 7, kernel_size=4, stride=2, device=self.device, use_numba=False)
+        cout = self.kan_conv(self.test_input)
+        print(cout.features.shape)
+        print(cout.features)
+        self.assertEqual(cout.features.shape[1], 7)
+
 
 if __name__ == '__main__':
     unittest.main()
