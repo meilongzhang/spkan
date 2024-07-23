@@ -1,6 +1,7 @@
 import torch.nn as nn
 import spconv.pytorch as spconv
 from torch import Tensor
+import torch
 
 try:
     from .. import conv as kanv
@@ -210,5 +211,5 @@ class SECOND_NECK(nn.Module):
             return spatial_features
 
 if __name__ == '__main__':
-    model = SECOND_NECK()
+    model = SECOND_NECK('cuda' if torch.cuda.is_available() else 'cpu')
     print(model)

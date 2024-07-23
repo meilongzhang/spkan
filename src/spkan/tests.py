@@ -151,8 +151,6 @@ class MultiBatchTest(unittest.TestCase):
         print("---------- test_base ----------")
         self.kan_conv = SparseKANConv3d(3, 3, 7, kernel_size=4, stride=2, device=self.device, use_numba=False)
         cout = self.kan_conv(self.test_input)
-        print(cout.features.shape)
-        print(cout.features)
         self.assertEqual(cout.features.shape[1], 7)
 
 

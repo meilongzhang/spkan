@@ -53,7 +53,7 @@ class SparseKANConv3d(SparseModule):
                    subm: bool = False,
                    output_padding: Union[int, List[int], Tuple[int, ...]] = 0,
                    transposed: bool = False,
-                   grid_size=5,
+                   grid_size=3,
                    spline_order=3,
                    grid_range=[-1, 1],
                    grid_eps=0.02,
@@ -85,6 +85,7 @@ class SparseKANConv3d(SparseModule):
             self.grid_eps = grid_eps
             self.cud = use_numba
             self.bias = bias
+            self.lambda_value = 1e-5
 
             num_elements = self.num_kernel_elems * in_channels
             h = (grid_range[1] - grid_range[0]) / grid_size
@@ -134,7 +135,16 @@ class SparseKANConv3d(SparseModule):
             A = self.b_splines(x, kernel_idx).transpose(0, 1)  # (in_features, batch_size, grid_size + spline_order)
             #print('A', A.shape)
             B = y.transpose(0, 1)
-            solution = torch.linalg.lstsq(A, B).solution
+            ATA = torch.bmm(A.transpose(1, 2), A)
+            ATB = torch.bmm(A.transpose(1, 2), B)
+            #print(ATA.shape)
+            #print(ATB.shape)
+            ATAreg = ATA + self.lambda_value * torch.eye(ATA.size(1), device=self.device)
+            solution = torch.linalg.lstsq(ATAreg, ATB).solution
+            #A = A + lambda_value * torch.eye(A.size(0), device=self.device)
+            #B = B + self.lambda_value * torch.eye(B.size(0), device=self.device)
+            #solution = torch.linalg.lstsq(A, B).solution
+            #print(solution.shape)
             result = solution.permute(2, 0, 1)
             return result.reshape(self.out_channels, -1).contiguous()
 
@@ -166,7 +176,8 @@ class SparseKANConv3d(SparseModule):
                 - margin
             )
             new_grid = self.grid_eps * grid_uniform + (1 - self.grid_eps) * grid_adaptive
-            new_grid = torch.concatenate(
+
+            new_grid = torch.cat(
                 [
                     new_grid[:1]
                     - uniform_step
@@ -200,7 +211,7 @@ class SparseKANConv3d(SparseModule):
 
       def forward(self, x: spconv.SparseConvTensor):
             ## Currently supporting only sparseconv tensors
-
+            #print(f"x features shape: {x.features.shape}")
             ## Calculate input output pairs
             outids, indice_pairs, indice_pair_num = ops.get_indice_pairs(x.indices,
                                                                          x.batch_size,
@@ -213,9 +224,9 @@ class SparseKANConv3d(SparseModule):
                                                                          self.output_padding,
                                                                          self.subm,
                                                                          self.transposed)
-
             # print('indice_pairs', indice_pairs.shape)
             # print('indice_pair_num', indice_pair_num.shape)
+            # print('indice_pair_num', indice_pair_num)
             # print('grid', self.grid.shape)
             # print('features', x.features.shape)
             # print('splineweights', self.spline_weights.shape)
@@ -255,91 +266,25 @@ class SparseKANConv3d(SparseModule):
                 ## Proxy convolution Function
                 for kernel_idx in range(self.num_kernel_elems):
                     ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
+                    if (indice_pair_num[kernel_idx] == 0):
+                         continue
                     iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
-
+                    
+                    #print(iopairs.shape)
                     inp = iopairs[0, :]
                     out = iopairs[1, :]
+                    #print(inp)
+                    #print(features[inp].shape)
+                    #print(features[inp.long()].shape)
                     x = features[inp.long()]
+                    self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
                     bases = self.b_splines(x, kernel_idx)
+                    
                     out_features[out.long()] += (
                         F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
                         F.linear(self.base_activation(x), self.base_weights[kernel_idx])
                     ).squeeze(0)
 
-                    """
-                    x = features[inp]#[:, :, None]
-                    bases = self.b_splines(x, kernel_idx)
-                    out_features[out] += (
-                        F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
-                        F.linear(self.base_activation(x), self.base_weights[kernel_idx])
-                    ).squeeze(0)
-                    """
-                    #self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
-                    
-                    #print(bases.shape)
-                    
-
-
-                #for i in range(len(reee[0])): # do this for all valid input-output pairs of kernel element
-                    #inp, out = iopairs[:,i] # I have here the input and output index of the pair
-
-                    # fetch features associated with the input index
-                    #x = features[inp][:,None]
-
-                    ### UPDATE GRID
-                    #self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
-            """
-                    x_sorted = torch.sort(x, dim=0)[0].view(1, 3)
-                    grid_adaptive = x_sorted[
-                        torch.linspace(
-                            0, 0, grid_size + 1, dtype=torch.int64, device=x.device
-                        )
-                    ]
-
-                    uniform_step = (x_sorted[-1] - x_sorted[0] + 2 * margin) / grid_size
-                    grid_uniform = (
-                        torch.arange(
-                            grid_size + 1, dtype=torch.float32, device=x.device
-                        ).unsqueeze(1)
-                        * uniform_step
-                        + x_sorted[0]
-                        - margin
-                    )
-
-                    new_grid = grid_eps * grid_uniform + (1 - grid_eps) * grid_adaptive
-                    new_grid = torch.concatenate(
-                        [
-                            new_grid[:1]
-                            - uniform_step
-                            * torch.arange(spline_order, 0, -1, device=x.device).unsqueeze(1),
-                            new_grid,
-                            new_grid[-1:]
-                            + uniform_step
-                            * torch.arange(1, spline_order + 1, device=x.device).unsqueeze(1),
-                        ],
-                        dim=0,
-                    )
-
-                    grid[kernel_idx].copy_(new_grid.T)
-                    """
-                    ### FINISH GRID UPDATE
-                    #bases = self.b_splines(x, kernel_idx)
-
-            """
-                    bases = ((x >= grid[kernel_idx][:,:-1]) & (x < grid[kernel_idx][:,1:])).to(torch.float32)
-                    for k in range(1, spline_order + 1):
-                        bases = (
-                            (x - grid[kernel_idx][:,:-(k+1)])
-                            / (grid[kernel_idx][:,k:-1] - grid[kernel_idx][:,:-(k+1)])
-                            * bases[:,:-1]
-                        ) + (
-                            (grid[kernel_idx][:,k+1:] - x)
-                            / (grid[kernel_idx][:,k+1:] - grid[kernel_idx][:,1:(-k)])
-                            * bases[:,1:]
-                        )
-                    """
-                    
-                    #out_features[out] += (F.linear(bases.view(1, -1), spline_weights[kernel_idx]).squeeze(0) + F.linear(self.base_activation(x.T), self.base_weights[kernel_idx]))[0]
 
             #print("return of layer", type(out_tensor))
             out_tensor = out_tensor.replace_feature(out_features)
@@ -376,7 +321,7 @@ class SubMKANConv3d(SparseKANConv3d):
                    bias: bool = False,
                    output_padding=0,
                    transposed: bool = False,
-                   grid_size=5,
+                   grid_size=3,
                    spline_order=3,
                    grid_range=[-1, 1],
                    grid_eps=0.02,
@@ -417,7 +362,7 @@ if __name__ == '__main__':
     pc_th = torch.from_numpy(pc)
     voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
 
-    print(voxels.shape)
+    #print(voxels.shape)
     indices = torch.cat((torch.zeros(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
     features = torch.max(voxels, dim=1)[0]
     spatial_shape = [1600, 1600, 80]
@@ -425,10 +370,10 @@ if __name__ == '__main__':
     features = features.to(device)
     indices = indices.to(device)
     test_sparse = spconv.SparseConvTensor(features, indices, spatial_shape, batch_size)
-    print(f"sparse input features shape: {test_sparse.features.shape}")
-    print(f"sparse input indices shape: {test_sparse.indices.shape}")
-    print(test_sparse.indices)
+    #print(f"sparse input features shape: {test_sparse.features.shape}")
+    #print(f"sparse input indices shape: {test_sparse.indices.shape}")
+    #print(test_sparse.indices)
     # Create a SparseKANConv3D
-    kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=True)
+    kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=False)
     # Perform a forward pass
     out = kan_conv(test_sparse)
