@@ -59,7 +59,8 @@ class SparseKANConv3d(SparseModule):
                    grid_eps=0.02,
                    base_activation = torch.nn.SiLU,
                    device='cpu',
-                   use_numba = False):
+                   use_numba = False,
+                   adaptive = False):
             super(SparseKANConv3d, self).__init__()
             self.in_channels = in_channels
             self.out_channels = out_channels
@@ -86,6 +87,7 @@ class SparseKANConv3d(SparseModule):
             self.cud = use_numba
             self.bias = bias
             self.lambda_value = 1e-5
+            self.adaptive = adaptive
 
             num_elements = self.num_kernel_elems * in_channels
             h = (grid_range[1] - grid_range[0]) / grid_size
@@ -126,24 +128,26 @@ class SparseKANConv3d(SparseModule):
                         * self.curve2coeff(
                             self.grid[i].T[self.spline_order : -self.spline_order],
                             noise,
-                            i
+                            i,
+                            True
                         )
                     )
 
-      def curve2coeff(self, x: torch.Tensor, y: torch.Tensor, kernel_idx):
+      def curve2coeff(self, x: torch.Tensor, y: torch.Tensor, kernel_idx, init=False):
             #print(x.shape)
             A = self.b_splines(x, kernel_idx).transpose(0, 1)  # (in_features, batch_size, grid_size + spline_order)
             #print('A', A.shape)
             B = y.transpose(0, 1)
-            ATA = torch.bmm(A.transpose(1, 2), A)
-            ATB = torch.bmm(A.transpose(1, 2), B)
-            #print(ATA.shape)
-            #print(ATB.shape)
-            ATAreg = ATA + self.lambda_value * torch.eye(ATA.size(1), device=self.device)
-            solution = torch.linalg.lstsq(ATAreg, ATB).solution
+            if self.adaptive and not init:
+                ATA = torch.bmm(A.transpose(1, 2), A)
+                ATB = torch.bmm(A.transpose(1, 2), B)
+                ATAreg = ATA + self.lambda_value * torch.eye(ATA.size(1), device=self.device)
+                solution = torch.linalg.lstsq(ATAreg, ATB).solution
+
+            else:
+                solution = torch.linalg.lstsq(A, B).solution
             #A = A + lambda_value * torch.eye(A.size(0), device=self.device)
             #B = B + self.lambda_value * torch.eye(B.size(0), device=self.device)
-            #solution = torch.linalg.lstsq(A, B).solution
             #print(solution.shape)
             result = solution.permute(2, 0, 1)
             return result.reshape(self.out_channels, -1).contiguous()
@@ -277,7 +281,8 @@ class SparseKANConv3d(SparseModule):
                     #print(features[inp].shape)
                     #print(features[inp.long()].shape)
                     x = features[inp.long()]
-                    self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
+                    if self.adaptive:
+                        self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
                     bases = self.b_splines(x, kernel_idx)
                     
                     out_features[out.long()] += (
@@ -327,7 +332,8 @@ class SubMKANConv3d(SparseKANConv3d):
                    grid_eps=0.02,
                    base_activation = torch.nn.SiLU,
                    device='cpu',
-                   use_numba = False):
+                   use_numba = False,
+                   adaptive=False):
             super(SubMKANConv3d, self).__init__(ndim, 
                                                 in_channels, 
                                                 out_channels, 
@@ -346,7 +352,8 @@ class SubMKANConv3d(SparseKANConv3d):
                                                 grid_eps, 
                                                 base_activation,
                                                 device, 
-                                                use_numba)
+                                                use_numba,
+                                                adaptive)
       
 if __name__ == '__main__':
     # Test SparseKANConv3D

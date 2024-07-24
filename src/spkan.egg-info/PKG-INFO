@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: spkan
-Version: 0.0.1a10
+Version: 0.0.1a12
 Summary: A drop-in replacement for sparse convolutions using Kolmogorov-Arnold Networks
 Author-email: "Mellon M. Zhang" <meilongz@gatech.edu>
 Project-URL: Homepage, https://github.com/meilongzhang/spkan
