@@ -22,13 +22,13 @@ class SECOND_NECK_BASE(nn.Module):
     def _block(self, manifold, in_channels, out_channels, kernel_size, stride, padding, dilation, output_padding, grid_size=3, use_numba=False):
         if manifold:
             return spconv.SparseSequential(
-                kanv.SubMKANConv3d(ndim=3, in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, grid_size=grid_size, use_numba=use_numba, device=self.device),
+                kanv.SubMKANConv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, grid_size=grid_size, use_numba=use_numba, device=self.device),
                 nn.BatchNorm1d(out_channels, eps=0.001, momentum=0.01, affine=True, track_running_stats=True),
                 nn.ReLU(inplace=True)
             )
         else:
             return spconv.SparseSequential(
-                kanv.SparseKANConv3d(ndim=3, in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, grid_size=grid_size, use_numba=use_numba, device=self.device),
+                kanv.SparseKANConv3d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, output_padding=output_padding, grid_size=grid_size, use_numba=use_numba, device=self.device),
                 nn.BatchNorm1d(out_channels, eps=0.001, momentum=0.01, affine=True, track_running_stats=True),
                 nn.ReLU(inplace=True)
             )

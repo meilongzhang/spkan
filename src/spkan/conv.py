@@ -9,10 +9,14 @@ import torch.nn.functional as F
 import torch
 from numba import cuda
 from spconv.pytorch.modules import SparseModule
+from spconv.pytorch.core import IndiceData, SparseConvTensor, ImplicitGemmIndiceData, expand_nd
 from typing import List, Optional, Tuple, Union
 from functools import reduce
 import operator
 import sys
+import basis_extension
+import time
+
 
 if __name__ == "__main__" and __package__ is None:
     import os
@@ -35,7 +39,8 @@ if sys.version_info[1] < 8:
 else:
     __PYTHON38__ = True
 
-class SparseKANConv3d(SparseModule):
+
+class SparseKANBase(SparseModule):
       """
       A pure Pytorch version of SparseKANConv3D. Offers Sparse 3D Convolution with Kolmogorov-Arnold Networks
       """
@@ -51,6 +56,7 @@ class SparseKANConv3d(SparseModule):
                    groups=1,
                    bias: bool = False,
                    subm: bool = False,
+                   inverse: bool = False,
                    output_padding: Union[int, List[int], Tuple[int, ...]] = 0,
                    transposed: bool = False,
                    grid_size=3,
@@ -60,8 +66,10 @@ class SparseKANConv3d(SparseModule):
                    base_activation = torch.nn.SiLU,
                    device='cpu',
                    use_numba = False,
-                   adaptive = False):
-            super(SparseKANConv3d, self).__init__()
+                   adaptive = False,
+                   indice_key = None,
+                   algo: Optional[ConvAlgo] = None):
+            super(SparseKANBase, self).__init__()
             self.in_channels = in_channels
             self.out_channels = out_channels
 
@@ -77,6 +85,7 @@ class SparseKANConv3d(SparseModule):
                 self.num_kernel_elems = reduce(operator.mul, self.kernel_size)
 
             self.subm = subm
+            self.inverse = inverse
             self.transposed = transposed
             self.device = device
 
@@ -88,6 +97,10 @@ class SparseKANConv3d(SparseModule):
             self.bias = bias
             self.lambda_value = 1e-5
             self.adaptive = adaptive
+            self.indice_key = indice_key
+
+            if algo is None:
+                self.algo = ConvAlgo.Native
 
             num_elements = self.num_kernel_elems * in_channels
             h = (grid_range[1] - grid_range[0]) / grid_size
@@ -213,21 +226,46 @@ class SparseKANConv3d(SparseModule):
             return bases.contiguous()
 
 
-      def forward(self, x: spconv.SparseConvTensor):
+      def forward(self, x: SparseConvTensor):
             ## Currently supporting only sparseconv tensors
             #print(f"x features shape: {x.features.shape}")
             ## Calculate input output pairs
-            outids, indice_pairs, indice_pair_num = ops.get_indice_pairs(x.indices,
-                                                                         x.batch_size,
-                                                                         x.spatial_shape,
-                                                                         ConvAlgo.Native,
-                                                                         self.kernel_size,
-                                                                         self.stride,
-                                                                         self.padding,
-                                                                         self.dilation,
-                                                                         self.output_padding,
-                                                                         self.subm,
-                                                                         self.transposed)
+            # for inverse
+            if self.inverse:
+                datas = x.find_indice_pair(self.indice_key)
+                outids = datas.indices
+                indice_pairs = datas.indice_pairs
+                indice_pair_num = datas.indice_pair_num
+                out_spatial_shape = datas.spatial_shape
+            
+            else:
+                datas = x.find_indice_pair(self.indice_key)
+                if self.indice_key is not None and datas is not None:
+                    outids = datas.out_indices
+                    indice_pairs = datas.indice_pairs
+                    indice_pair_num = datas.indice_pair_num
+                    out_spatial_shape = x.spatial_shape
+                    assert self.subm, "only support reuse subm indices"
+                    self._check_subm_reuse_valid(input, spatial_shape,
+                                                    datas)
+                else:
+                    
+                    outids, indice_pairs, indice_pair_num = ops.get_indice_pairs(x.indices,
+                                                                                x.batch_size,
+                                                                                x.spatial_shape,
+                                                                                self.algo,
+                                                                                self.kernel_size,
+                                                                                self.stride,
+                                                                                self.padding,
+                                                                                self.dilation,
+                                                                                self.output_padding,
+                                                                                self.subm,
+                                                                                self.transposed)
+                    if self.subm:
+                         out_spatial_shape = x.spatial_shape
+                    else:
+                         out_spatial_shape = ops.get_conv_output_size(
+                            x.spatial_shape, self.kernel_size, self.stride, self.padding, self.dilation)
             # print('indice_pairs', indice_pairs.shape)
             # print('indice_pair_num', indice_pair_num.shape)
             # print('indice_pair_num', indice_pair_num)
@@ -236,17 +274,37 @@ class SparseKANConv3d(SparseModule):
             # print('splineweights', self.spline_weights.shape)
             # print('baseweights', self.base_weights.shape)
             ## Copy and calculate some sparse tensor attributes
+
             out_tensor = x.shadow_copy()
-            out_spatial_shape = ops.get_conv_output_size(
-                    x.spatial_shape, self.kernel_size, self.stride, self.padding, self.dilation)
+            
             indice_dict = x.indice_dict.copy()
             out_features = torch.zeros((outids.size(0), self.out_channels), device=self.device)
+            indice_data = IndiceData(outids,
+                                    x.indices,
+                                    indice_pairs,
+                                    indice_pair_num,
+                                    x.spatial_shape,
+                                    out_spatial_shape,
+                                    is_subm=self.subm,
+                                    algo=self.algo,
+                                    ksize=self.kernel_size,
+                                    stride=self.stride,
+                                    padding=self.padding,
+                                    dilation=self.dilation)
+            
+            if self.indice_key is not None:
+                msg = f"your indice key {self.indice_key} already exists in this sparse tensor."
+                assert self.indice_key not in indice_dict, msg
+                indice_dict[self.indice_key] = indice_data
 
             # print('out_features', out_features.shape)
             features = x.features
             ## Do the actual convolution
             if self.cud:
+                 ## ONLY SUPPORTED FOR REGULAR CONVOLUTIONS
                  assert self.device == torch.device('cuda')
+
+                 start = time.time()
                  threadsperblock = self.num_kernel_elems
                  blockspergrid = 1
                  activated = self.base_activation(features)
@@ -266,38 +324,47 @@ class SparseKANConv3d(SparseModule):
 
                  cuda_tools.test_conv[blockspergrid, threadsperblock](ip, ipn, fe, ac, of, sw, bw, gr, self.grid_size, self.spline_order, self.grid_eps, res, temp)
                  out_features = torch.tensor(of.copy_to_host()).to(self.device)
+                 end = time.time()
+                 print("numba", end-start)
+                 """
+                 start = time.time()
+                 bases = basis_extension.forward(features, self.grid, indice_pairs, indice_pair_num, self.grid.size(2), self.num_kernel_elems, self.spline_order)
+                 end = time.time()
+                 print("cuda", end-start)
+                 """
+
             else:
                 ## Proxy convolution Function
+                start = time.time()
                 for kernel_idx in range(self.num_kernel_elems):
                     ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
                     if (indice_pair_num[kernel_idx] == 0):
                          continue
+                    
                     iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
                     
-                    #print(iopairs.shape)
                     inp = iopairs[0, :]
                     out = iopairs[1, :]
-                    #print(inp)
-                    #print(features[inp].shape)
-                    #print(features[inp.long()].shape)
+
+                    #print(features.shape)
                     x = features[inp.long()]
+                    #print(x.shape)
                     if self.adaptive:
                         self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
+
                     bases = self.b_splines(x, kernel_idx)
                     
                     out_features[out.long()] += (
                         F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
                         F.linear(self.base_activation(x), self.base_weights[kernel_idx])
                     ).squeeze(0)
+                end = time.time()
+                print("loop", end-start)
 
-
-            #print("return of layer", type(out_tensor))
             out_tensor = out_tensor.replace_feature(out_features)
             out_tensor.indices = outids
             out_tensor.indice_dict = indice_dict
             out_tensor.spatial_shape = out_spatial_shape
-            #print(out_tensor.batch_size)
-            #out_tensor.batch_size = x.batch_size
             
             return out_tensor
       
@@ -313,9 +380,52 @@ class SparseKANConv3d(SparseModule):
                 f'output_padding={self.output_padding}, '
                 f'bias={self.bias})')
       
-class SubMKANConv3d(SparseKANConv3d):
+      def _check_subm_reuse_valid(self, inp: SparseConvTensor,
+                                spatial_shape: List[int],
+                                datas: Union[ImplicitGemmIndiceData,
+                                             IndiceData]):
+        assert datas.is_subm, "only support reuse subm indices"
+        if self.kernel_size != datas.ksize:
+            raise ValueError(
+                f"subm with same indice_key must have same kernel"
+                f" size, expect {datas.ksize}, this layer {self.kernel_size}")
+        if self.dilation != datas.dilation:
+            raise ValueError(
+                f"subm with same indice_key must have same dilation"
+                f", expect {datas.dilation}, this layer {self.dilation}")
+        if inp.spatial_shape != datas.spatial_shape:
+            raise ValueError(
+                f"subm with same indice_key must have same spatial structure"
+                f", expect {datas.spatial_shape}, input {spatial_shape}")
+        if inp.indices.shape[0] != datas.indices.shape[0]:
+            raise ValueError(
+                f"subm with same indice_key must have same num of indices"
+                f", expect {datas.indices.shape[0]}, input {inp.indices.shape[0]}"
+            )
+
+      def _check_inverse_reuse_valid(self, inp: SparseConvTensor,
+                                spatial_shape: List[int],
+                                datas: Union[ImplicitGemmIndiceData,
+                                                IndiceData]):
+        if self.kernel_size != datas.ksize:
+            raise ValueError(
+                f"Inverse with same indice_key must have same kernel"
+                f" size, expect {datas.ksize}, this layer {self.kernel_size}, "
+                "please check Inverse Convolution in docs/USAGE.md.")
+        if inp.spatial_shape != datas.out_spatial_shape:
+            raise ValueError(
+                f"Inverse with same indice_key must have same spatial structure (spatial shape)"
+                f", expect {datas.spatial_shape}, input {spatial_shape}, "
+                "please check Inverse Convolution in docs/USAGE.md.")
+        if inp.indices.shape[0] != datas.out_indices.shape[0]:
+            raise ValueError(
+                f"Inverse with same indice_key must have same num of indices"
+                f", expect {datas.indices.shape[0]}, input {inp.indices.shape[0]}, "
+                "please check Inverse Convolution in .")
+      
+
+class SparseKANConv2d(SparseKANBase):
      def __init__(self,
-                   ndim: int,
                    in_channels: int,
                    out_channels: int,
                    kernel_size=3,
@@ -333,8 +443,9 @@ class SubMKANConv3d(SparseKANConv3d):
                    base_activation = torch.nn.SiLU,
                    device='cpu',
                    use_numba = False,
-                   adaptive=False):
-            super(SubMKANConv3d, self).__init__(ndim, 
+                   adaptive=False,
+                   indice_key = None):
+            super(SparseKANConv2d, self).__init__(2, 
                                                 in_channels, 
                                                 out_channels, 
                                                 kernel_size, 
@@ -343,7 +454,8 @@ class SubMKANConv3d(SparseKANConv3d):
                                                 dilation, 
                                                 groups, 
                                                 bias, 
-                                                True, 
+                                                False,
+                                                False, 
                                                 output_padding, 
                                                 transposed, 
                                                 grid_size, 
@@ -353,7 +465,229 @@ class SubMKANConv3d(SparseKANConv3d):
                                                 base_activation,
                                                 device, 
                                                 use_numba,
-                                                adaptive)
+                                                adaptive,
+                                                indice_key)
+class SparseKANConv3d(SparseKANBase):
+     def __init__(self,
+                   in_channels: int,
+                   out_channels: int,
+                   kernel_size=3,
+                   stride=1,
+                   padding=0,
+                   dilation=1,
+                   groups=1,
+                   bias: bool = False,
+                   output_padding=0,
+                   transposed: bool = False,
+                   grid_size=3,
+                   spline_order=3,
+                   grid_range=[-1, 1],
+                   grid_eps=0.02,
+                   base_activation = torch.nn.SiLU,
+                   device='cpu',
+                   use_numba = False,
+                   adaptive=False,
+                   indice_key = None):
+            super(SparseKANConv3d, self).__init__(3, 
+                                                in_channels, 
+                                                out_channels, 
+                                                kernel_size, 
+                                                stride, 
+                                                padding, 
+                                                dilation, 
+                                                groups, 
+                                                bias, 
+                                                False,
+                                                False, 
+                                                output_padding, 
+                                                transposed, 
+                                                grid_size, 
+                                                spline_order, 
+                                                grid_range, 
+                                                grid_eps, 
+                                                base_activation,
+                                                device, 
+                                                use_numba,
+                                                adaptive,
+                                                indice_key)
+
+class SubMKANConv2d(SparseKANBase):
+     def __init__(self,
+                   in_channels: int,
+                   out_channels: int,
+                   kernel_size=3,
+                   stride=1,
+                   padding=0,
+                   dilation=1,
+                   groups=1,
+                   bias: bool = False,
+                   output_padding=0,
+                   transposed: bool = False,
+                   grid_size=3,
+                   spline_order=3,
+                   grid_range=[-1, 1],
+                   grid_eps=0.02,
+                   base_activation = torch.nn.SiLU,
+                   device='cpu',
+                   use_numba = False,
+                   adaptive=False,
+                   indice_key = None):
+            super(SubMKANConv3d, self).__init__(2, 
+                                                in_channels, 
+                                                out_channels, 
+                                                kernel_size, 
+                                                stride, 
+                                                padding, 
+                                                dilation, 
+                                                groups, 
+                                                bias, 
+                                                True, 
+                                                False,
+                                                output_padding, 
+                                                transposed, 
+                                                grid_size, 
+                                                spline_order, 
+                                                grid_range, 
+                                                grid_eps, 
+                                                base_activation,
+                                                device, 
+                                                use_numba,
+                                                adaptive,
+                                                indice_key)
+
+
+class SubMKANConv3d(SparseKANBase):
+     def __init__(self,
+                   in_channels: int,
+                   out_channels: int,
+                   kernel_size=3,
+                   stride=1,
+                   padding=0,
+                   dilation=1,
+                   groups=1,
+                   bias: bool = False,
+                   output_padding=0,
+                   transposed: bool = False,
+                   grid_size=3,
+                   spline_order=3,
+                   grid_range=[-1, 1],
+                   grid_eps=0.02,
+                   base_activation = torch.nn.SiLU,
+                   device='cpu',
+                   use_numba = False,
+                   adaptive=False,
+                   indice_key = None):
+            super(SubMKANConv3d, self).__init__(3, 
+                                                in_channels, 
+                                                out_channels, 
+                                                kernel_size, 
+                                                stride, 
+                                                padding, 
+                                                dilation, 
+                                                groups, 
+                                                bias, 
+                                                True, 
+                                                False,
+                                                output_padding, 
+                                                transposed, 
+                                                grid_size, 
+                                                spline_order, 
+                                                grid_range, 
+                                                grid_eps, 
+                                                base_activation,
+                                                device, 
+                                                use_numba,
+                                                adaptive,
+                                                indice_key)
+            
+class SparseInverseKANConv2d(SparseKANBase):
+    def __init__(self,
+                   in_channels: int,
+                   out_channels: int,
+                   kernel_size=3,
+                   stride=1,
+                   padding=0,
+                   dilation=1,
+                   groups=1,
+                   bias: bool = False,
+                   output_padding=0,
+                   transposed: bool = False,
+                   grid_size=3,
+                   spline_order=3,
+                   grid_range=[-1, 1],
+                   grid_eps=0.02,
+                   base_activation = torch.nn.SiLU,
+                   device='cpu',
+                   use_numba = False,
+                   adaptive=False,
+                   indice_key = None):
+            super(SparseInverseKANConv2d, self).__init__(2, 
+                                                in_channels, 
+                                                out_channels, 
+                                                kernel_size, 
+                                                stride, 
+                                                padding, 
+                                                dilation, 
+                                                groups, 
+                                                bias, 
+                                                False, 
+                                                True,
+                                                output_padding, 
+                                                transposed, 
+                                                grid_size, 
+                                                spline_order, 
+                                                grid_range, 
+                                                grid_eps, 
+                                                base_activation,
+                                                device, 
+                                                use_numba,
+                                                adaptive,
+                                                indice_key)
+
+class SparseInverseKANConv3d(SparseKANBase):
+    def __init__(self,
+                   in_channels: int,
+                   out_channels: int,
+                   kernel_size=3,
+                   stride=1,
+                   padding=0,
+                   dilation=1,
+                   groups=1,
+                   bias: bool = False,
+                   output_padding=0,
+                   transposed: bool = False,
+                   grid_size=3,
+                   spline_order=3,
+                   grid_range=[-1, 1],
+                   grid_eps=0.02,
+                   base_activation = torch.nn.SiLU,
+                   device='cpu',
+                   use_numba = False,
+                   adaptive=False,
+                   indice_key = None):
+            super(SparseInverseKANConv3d, self).__init__(3, 
+                                                in_channels, 
+                                                out_channels, 
+                                                kernel_size, 
+                                                stride, 
+                                                padding, 
+                                                dilation, 
+                                                groups, 
+                                                bias, 
+                                                False, 
+                                                True,
+                                                output_padding, 
+                                                transposed, 
+                                                grid_size, 
+                                                spline_order, 
+                                                grid_range, 
+                                                grid_eps, 
+                                                base_activation,
+                                                device, 
+                                                use_numba,
+                                                adaptive,
+                                                indice_key)
+
       
 if __name__ == '__main__':
     # Test SparseKANConv3D
@@ -369,18 +703,28 @@ if __name__ == '__main__':
     pc_th = torch.from_numpy(pc)
     voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
 
-    #print(voxels.shape)
     indices = torch.cat((torch.zeros(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
     features = torch.max(voxels, dim=1)[0]
+    
+    pc = np.random.uniform(-10, 10, size=[1000, 3])
+    pc_th = torch.from_numpy(pc)
+    voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
+
+    indices1 = torch.cat((torch.ones(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
+    features1 = torch.max(voxels, dim=1)[0]
+
+    indices_full = torch.cat((indices, indices1), dim=0)
+    features_full = torch.cat((features, features1), dim=0)
+
     spatial_shape = [1600, 1600, 80]
-    batch_size = 1
-    features = features.to(device)
-    indices = indices.to(device)
-    test_sparse = spconv.SparseConvTensor(features, indices, spatial_shape, batch_size)
-    #print(f"sparse input features shape: {test_sparse.features.shape}")
-    #print(f"sparse input indices shape: {test_sparse.indices.shape}")
-    #print(test_sparse.indices)
-    # Create a SparseKANConv3D
-    kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=False)
+    batch_size = 2
+    features = features_full.to(device)
+    indices = indices_full.to(device)
+    test_sparse = SparseConvTensor(features, indices, spatial_shape, batch_size)
+    kan_conv_cuda = SparseKANConv3d(3, 5, device=device, indice_key='conv1c', use_numba=True)
+    kan_conv_loop = SparseKANConv3d(3, 5, device=device, indice_key='conv1', use_numba=False)
     # Perform a forward pass
-    out = kan_conv(test_sparse)
+    out = kan_conv_loop(test_sparse)
+    out = kan_conv_cuda(test_sparse)
+
+    #kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=False)
