@@ -14,7 +14,8 @@ from typing import List, Optional, Tuple, Union
 from functools import reduce
 import operator
 import sys
-import basis_extension
+if torch.cuda.is_available():
+    import basis_extension
 import time
 
 
@@ -106,6 +107,7 @@ class SparseKANBase(SparseModule):
             h = (grid_range[1] - grid_range[0]) / grid_size
 
             # this grid is shared resource for all kernel elements
+            
             self.grid = (
                 (
                     torch.arange(-spline_order, grid_size + spline_order + 1) * h + grid_range[0]
@@ -113,10 +115,10 @@ class SparseKANBase(SparseModule):
                 .expand(num_elements, -1)
                 .contiguous()
             ).reshape((self.num_kernel_elems,in_channels,-1)).to(device) # 27 kernel locations, 3 input channels, 5 kernels (output channels), 12 bspline parameters
+            
             #self.register_buffer("grid", self.grid)
             self.base_weights = torch.nn.Parameter(torch.Tensor(self.num_kernel_elems, out_channels, in_channels)).to(device)
             self.spline_weights = torch.nn.Parameter(torch.Tensor(self.num_kernel_elems, out_channels, in_channels * (grid_size + spline_order))).to(device)
-
             self.scale_base = 1.0
             self.scale_noise = 0.1
             self.scale_spline = 1.0
@@ -297,13 +299,15 @@ class SparseKANBase(SparseModule):
                 assert self.indice_key not in indice_dict, msg
                 indice_dict[self.indice_key] = indice_data
 
-            # print('out_features', out_features.shape)
+            print('out_features_pre', out_features.shape)
+            print('indice_pair_num', indice_pair_num.shape, indice_pair_num)
             features = x.features
             ## Do the actual convolution
             if self.cud:
                  ## ONLY SUPPORTED FOR REGULAR CONVOLUTIONS
                  assert self.device == torch.device('cuda')
-
+                 activated = self.base_activation(features)
+                 """
                  start = time.time()
                  threadsperblock = self.num_kernel_elems
                  blockspergrid = 1
@@ -327,15 +331,23 @@ class SparseKANBase(SparseModule):
                  end = time.time()
                  print("numba", end-start)
                  """
-                 start = time.time()
-                 bases = basis_extension.forward(features, self.grid, indice_pairs, indice_pair_num, self.grid.size(2), self.num_kernel_elems, self.spline_order)
-                 end = time.time()
-                 print("cuda", end-start)
-                 """
+                 #start = time.time()
+                 
+                 out = basis_extension.forward(features, self.grid, indice_pairs, 
+                                                 indice_pair_num, self.grid.size(2), self.num_kernel_elems, 
+                                                 self.spline_order, activated, self.spline_weights,
+                                                 self.base_weights, outids.size(0))
+                 
+                 bases = out[0]
+                 out_features = out[1]
+                 #last_base = out[2]
+                 #end = time.time()
+                 #print("cuda", end-start)
+                 
 
             else:
                 ## Proxy convolution Function
-                start = time.time()
+                #start = time.time()
                 for kernel_idx in range(self.num_kernel_elems):
                     ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
                     if (indice_pair_num[kernel_idx] == 0):
@@ -358,9 +370,14 @@ class SparseKANBase(SparseModule):
                         F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
                         F.linear(self.base_activation(x), self.base_weights[kernel_idx])
                     ).squeeze(0)
-                end = time.time()
-                print("loop", end-start)
+                #end = time.time()
+                #print("loop", end-start)
 
+            #print(out_features[outids.size(0)-1:,:])
+            print('indice_pair_num-post', indice_pair_num.shape, indice_pair_num)
+            print("bases", bases[-indice_pair_num[26]:,:,:6].shape, bases[-indice_pair_num[26]:,:,:6])
+            print("out_features", out_features.shape)
+            print(out_features[:5,:])
             out_tensor = out_tensor.replace_feature(out_features)
             out_tensor.indices = outids
             out_tensor.indice_dict = indice_dict
@@ -721,10 +738,12 @@ if __name__ == '__main__':
     features = features_full.to(device)
     indices = indices_full.to(device)
     test_sparse = SparseConvTensor(features, indices, spatial_shape, batch_size)
-    kan_conv_cuda = SparseKANConv3d(3, 5, device=device, indice_key='conv1c', use_numba=True)
-    kan_conv_loop = SparseKANConv3d(3, 5, device=device, indice_key='conv1', use_numba=False)
+    if torch.cuda.is_available():
+        kan_conv_cuda = SparseKANConv3d(3, 5, device=device, indice_key='conv1c', use_numba=True)
+        out = kan_conv_cuda(test_sparse)
+
+    kan_conv_loop = SparseKANConv3d(3, 5, device=device, indice_key='kconv1', use_numba=False, adaptive=False)
+    kan_conv_loop.base_weights = kan_conv_cuda.base_weights
+    kan_conv_loop.spline_weights = kan_conv_cuda.spline_weights
     # Perform a forward pass
     out = kan_conv_loop(test_sparse)
-    out = kan_conv_cuda(test_sparse)
-
-    #kan_conv = SparseKANConv3d(3, 3, 5, device=device, subm=False)
