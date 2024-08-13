@@ -50,7 +50,7 @@ std::vector<torch::Tensor> basis_forward(torch::Tensor features, torch::Tensor g
     torch::Tensor inp_idx = torch::empty({num_operations}, torch::kInt);
     torch::Tensor out_idx = torch::empty({num_operations}, torch::kInt);
     torch::Tensor kernel_indices = torch::empty({num_operations}, torch::kInt);
-    torch::Tensor spline_output = torch::empty({num_out, out_dim}, torch::kFloat);
+    torch::Tensor spline_output = torch::zeros({num_out, out_dim}, torch::kFloat);
 
     int current_index = 0;
     for (int i = 0; i < k; i++) {
@@ -66,12 +66,14 @@ std::vector<torch::Tensor> basis_forward(torch::Tensor features, torch::Tensor g
         }
     }
 
-    basis_cuda_forward(num_operations, num_dims, g, k, s, num_points, grid.data_ptr<float>(), features.data_ptr<float>(), 
-                    bases.data_ptr<float>(), kernel_indices.data_ptr<int>(), inp_idx.data_ptr<int>(), result.data_ptr<float>(),
-                    out_idx.data_ptr<int>(), activated_features.data_ptr<float>(), spline_weights.data_ptr<float>(), base_weights.data_ptr<float>(),
-                    spline_output.data_ptr<float>(), out_dim, basis_dim, num_out);
-
-    return {result, spline_output};
+    if (num_operations * num_dims > 0) {
+        basis_cuda_forward(num_operations, num_dims, g, k, s, num_points, grid.data_ptr<float>(), features.data_ptr<float>(), 
+                      bases.data_ptr<float>(), kernel_indices.data_ptr<int>(), inp_idx.data_ptr<int>(), result.data_ptr<float>(),
+                      out_idx.data_ptr<int>(), activated_features.data_ptr<float>(), spline_weights.data_ptr<float>(), base_weights.data_ptr<float>(),
+                      spline_output.data_ptr<float>(), out_dim, basis_dim, num_out);
+    }
+    
+    return {spline_output};
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

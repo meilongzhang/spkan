@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools >= 61.0"]
+requires = ["setuptools >= 61.0", "torch", "wheel", "pybind11", "ninja"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "spkan"
-version = "0.0.2a1"
+version = "0.0.2a2"
 authors = [
   { name="Mellon M. Zhang", email="meilongz@gatech.edu" },
 ]

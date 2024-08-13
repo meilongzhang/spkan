@@ -71,6 +71,7 @@ class SparseKANBase(SparseModule):
                    indice_key = None,
                    algo: Optional[ConvAlgo] = None):
             super(SparseKANBase, self).__init__()
+            self.ndim = ndim
             self.in_channels = in_channels
             self.out_channels = out_channels
 
@@ -107,7 +108,7 @@ class SparseKANBase(SparseModule):
             h = (grid_range[1] - grid_range[0]) / grid_size
 
             # this grid is shared resource for all kernel elements
-            
+
             self.grid = (
                 (
                     torch.arange(-spline_order, grid_size + spline_order + 1) * h + grid_range[0]
@@ -230,7 +231,7 @@ class SparseKANBase(SparseModule):
 
       def forward(self, x: SparseConvTensor):
             ## Currently supporting only sparseconv tensors
-            #print(f"x features shape: {x.features.shape}")
+            print(f"x features shape: {x.features.shape}")
             ## Calculate input output pairs
             # for inverse
             if self.inverse:
@@ -242,6 +243,7 @@ class SparseKANBase(SparseModule):
             
             else:
                 datas = x.find_indice_pair(self.indice_key)
+                #print(datas)
                 if self.indice_key is not None and datas is not None:
                     outids = datas.out_indices
                     indice_pairs = datas.indice_pairs
@@ -268,19 +270,10 @@ class SparseKANBase(SparseModule):
                     else:
                          out_spatial_shape = ops.get_conv_output_size(
                             x.spatial_shape, self.kernel_size, self.stride, self.padding, self.dilation)
-            # print('indice_pairs', indice_pairs.shape)
-            # print('indice_pair_num', indice_pair_num.shape)
-            # print('indice_pair_num', indice_pair_num)
-            # print('grid', self.grid.shape)
-            # print('features', x.features.shape)
-            # print('splineweights', self.spline_weights.shape)
-            # print('baseweights', self.base_weights.shape)
             ## Copy and calculate some sparse tensor attributes
 
             out_tensor = x.shadow_copy()
-            
             indice_dict = x.indice_dict.copy()
-            out_features = torch.zeros((outids.size(0), self.out_channels), device=self.device)
             indice_data = IndiceData(outids,
                                     x.indices,
                                     indice_pairs,
@@ -299,85 +292,45 @@ class SparseKANBase(SparseModule):
                 assert self.indice_key not in indice_dict, msg
                 indice_dict[self.indice_key] = indice_data
 
-            print('out_features_pre', out_features.shape)
-            print('indice_pair_num', indice_pair_num.shape, indice_pair_num)
             features = x.features
             ## Do the actual convolution
             if self.cud:
                  ## ONLY SUPPORTED FOR REGULAR CONVOLUTIONS
                  assert self.device == torch.device('cuda')
                  activated = self.base_activation(features)
-                 """
-                 start = time.time()
-                 threadsperblock = self.num_kernel_elems
-                 blockspergrid = 1
-                 activated = self.base_activation(features)
-                 result = torch.randn(self.num_kernel_elems, self.in_channels, 12).to(self.device)
-                 temp = torch.randn(self.in_channels, 12).to(self.device)
-
-                 ip = cuda.as_cuda_array(indice_pairs)
-                 ipn = cuda.as_cuda_array(indice_pair_num)
-                 gr = cuda.as_cuda_array(self.grid)
-                 fe = cuda.as_cuda_array(features)
-                 sw = cuda.as_cuda_array(self.spline_weights.detach())
-                 bw = cuda.as_cuda_array(self.base_weights.detach())
-                 of = cuda.as_cuda_array(out_features.detach())
-                 ac = cuda.as_cuda_array(activated)
-                 res = cuda.as_cuda_array(result)
-                 temp = cuda.as_cuda_array(temp)
-
-                 cuda_tools.test_conv[blockspergrid, threadsperblock](ip, ipn, fe, ac, of, sw, bw, gr, self.grid_size, self.spline_order, self.grid_eps, res, temp)
-                 out_features = torch.tensor(of.copy_to_host()).to(self.device)
-                 end = time.time()
-                 print("numba", end-start)
-                 """
-                 #start = time.time()
-                 
-                 out = basis_extension.forward(features, self.grid, indice_pairs, 
-                                                 indice_pair_num, self.grid.size(2), self.num_kernel_elems, 
-                                                 self.spline_order, activated, self.spline_weights,
-                                                 self.base_weights, outids.size(0))
-                 
-                 bases = out[0]
-                 out_features = out[1]
-                 #last_base = out[2]
-                 #end = time.time()
-                 #print("cuda", end-start)
-                 
-
+                 out_features = basis_extension.forward(features, self.grid, indice_pairs, 
+                                        indice_pair_num, self.grid.size(2), self.num_kernel_elems, 
+                                        self.spline_order, activated, self.spline_weights,
+                                        self.base_weights, outids.size(0))[0]
+                 #bases = out[0]
+                 #out_features = out[1]
+                
             else:
                 ## Proxy convolution Function
-                #start = time.time()
+                out_features = torch.zeros((outids.size(0), self.out_channels), device=self.device)
                 for kernel_idx in range(self.num_kernel_elems):
                     ### DO THIS IN PARALLEL PER KERNEL ELEMENT ###
                     if (indice_pair_num[kernel_idx] == 0):
                          continue
                     
                     iopairs = indice_pairs[:,kernel_idx,:indice_pair_num[kernel_idx]] # all the input-output pairs for kernel
-                    
                     inp = iopairs[0, :]
                     out = iopairs[1, :]
 
-                    #print(features.shape)
                     x = features[inp.long()]
-                    #print(x.shape)
                     if self.adaptive:
                         self.update_grid(x, margin=0.01, kernel_idx=kernel_idx)
 
                     bases = self.b_splines(x, kernel_idx)
-                    
                     out_features[out.long()] += (
                         F.linear(bases.view(-1, bases.size(-1)*bases.size(-2)), self.spline_weights[kernel_idx]).squeeze(0) +
                         F.linear(self.base_activation(x), self.base_weights[kernel_idx])
                     ).squeeze(0)
-                #end = time.time()
-                #print("loop", end-start)
 
-            #print(out_features[outids.size(0)-1:,:])
-            print('indice_pair_num-post', indice_pair_num.shape, indice_pair_num)
-            print("bases", bases[-indice_pair_num[26]:,:,:6].shape, bases[-indice_pair_num[26]:,:,:6])
-            print("out_features", out_features.shape)
-            print(out_features[:5,:])
+            #print(out_features)
+            # non_zero_indices = torch.nonzero(out_features)
+            # for index in non_zero_indices:
+            #     print(f"Index: {index.tolist()}, Value: {out_features[tuple(index)].item()}")
             out_tensor = out_tensor.replace_feature(out_features)
             out_tensor.indices = outids
             out_tensor.indice_dict = indice_dict
@@ -710,20 +663,21 @@ if __name__ == '__main__':
     # Test SparseKANConv3D
     # Create a SparseConvTensor
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     gen = PointToVoxel(
         vsize_xyz=[0.1, 0.1, 0.1],
         coors_range_xyz=[-80, -80, -2, 80, 80, 6],
         num_point_features=3,
         max_num_voxels=5000,
         max_num_points_per_voxel=5)
-    pc = np.random.uniform(-10, 10, size=[1000, 3])
+    pc = np.random.uniform(-10, 10, size=[10000, 3])
     pc_th = torch.from_numpy(pc)
     voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
 
     indices = torch.cat((torch.zeros(voxels.shape[0], 1), coords[:, [2,1,0]]), dim=1).to(torch.int32)
     features = torch.max(voxels, dim=1)[0]
     
-    pc = np.random.uniform(-10, 10, size=[1000, 3])
+    pc = np.random.uniform(-10, 10, size=[10000, 3])
     pc_th = torch.from_numpy(pc)
     voxels, coords, num_points_per_voxel = gen(pc_th, empty_mean=True)
 
@@ -738,12 +692,22 @@ if __name__ == '__main__':
     features = features_full.to(device)
     indices = indices_full.to(device)
     test_sparse = SparseConvTensor(features, indices, spatial_shape, batch_size)
-    if torch.cuda.is_available():
-        kan_conv_cuda = SparseKANConv3d(3, 5, device=device, indice_key='conv1c', use_numba=True)
-        out = kan_conv_cuda(test_sparse)
-
-    kan_conv_loop = SparseKANConv3d(3, 5, device=device, indice_key='kconv1', use_numba=False, adaptive=False)
-    kan_conv_loop.base_weights = kan_conv_cuda.base_weights
-    kan_conv_loop.spline_weights = kan_conv_cuda.spline_weights
+    torch.manual_seed(0)
+    
+    kan_conv_loop = SparseKANConv3d(3, 128, device=device, indice_key='kconv1', use_numba=False)
     # Perform a forward pass
+    start = time.time()
     out = kan_conv_loop(test_sparse)
+    end = time.time()
+    print("loop", end-start)
+    
+    torch.manual_seed(0)
+    
+    if torch.cuda.is_available():
+        kan_conv_cuda = SparseKANConv3d(3, 128, device=device, indice_key='conv1c', use_numba=True)
+        start = time.time()
+        out = kan_conv_cuda(test_sparse)
+        end = time.time()
+        print("cuda", end-start)
+
+    

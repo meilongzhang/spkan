@@ -21,20 +21,20 @@
  * @param b: dimension of bases for use with spline weights
  * @param spline_weights: 1d array of size k*o*m*b
  * @param base_weights: 1d array of shape k*o*m
- * @param spline_outputs: nxo
+ * @param spline_outputs: num_outxo
  * @param out_idx: 1d array of size n. each element is an output indice location for an operation
  * @param activated_features: 1d array of size p*m, features passed through specified activation function
  * 
  * 
 */
 
-
+//maybe can add more __restrict__ here
 __global__ void basis_cuda_forward_kernel(int n, int m, int g, int k, int s, 
                                     const float * __restrict__ grid, const float * __restrict__ features, 
-                                    float * bases, const int * __restrict__ kernel_indices, 
-                                    const int * __restrict__ inp_idx, float * result, const int * __restrict__ out_idx,
+                                    float * __restrict__ bases, const int * __restrict__ kernel_indices, 
+                                    const int * __restrict__ inp_idx, float * __restrict__ result, const int * __restrict__ out_idx,
                                     const float * __restrict__ activated_features, const float * __restrict__ spline_weights,
-                                    const float * __restrict__ base_weights, float * spline_output, int o, int b, int num_out) {
+                                    const float * __restrict__ base_weights, float * __restrict__ spline_output, int o, int b, int num_out) {
 
     int idx = threadIdx.x + blockIdx.x * blockDim.x; 
     if (idx >= n*m) {
@@ -51,10 +51,8 @@ __global__ void basis_cuda_forward_kernel(int n, int m, int g, int k, int s,
     float activated_feature = activated_features[point_idx * m + feature_idx]; // which activated feature
     
     int gridstart = kernel_idx * m * g + feature_idx * g; // the start of associated grid
-    int gridend = gridstart + g; // end of associated grid, not inclusive
 
-    int basestart = idx * g; // start of associated bases
-    int baseend = basestart + g; // end of associated bases, not inclusive
+    int basestart = operation_idx * m * g + feature_idx * g; // start of associated bases
 
     /* Instantiate bases */
     //#pragma unroll
@@ -71,27 +69,7 @@ __global__ void basis_cuda_forward_kernel(int n, int m, int g, int k, int s,
             result[basestart + i] = ((feature - grid[gridstart + i]) / 
                 (grid[gridstart + c + i] - grid[gridstart + i]) * bases[basestart + i])
                 + ((grid[gridstart + c + i + 1] - feature) / 
-                (grid[gridstart + c + i + 1] - grid[gridstart + 1]) * bases[basestart + i + 1]);
-        }
-
-        if (c == s) {
-            
-            for (int i = 0; i < o; i++) { // increment output dimension
-                int sw_start = kernel_idx * o * m + i * m + feature_idx;
-                
-                for (int j = 0; j < b; j++) {
-                    // if (out_point_idx >= num_out) {
-                    //     *status = out_point_idx;
-                    //     return;
-                    // }
-                    //atomicExch(last_base, basestart + j);
-                    atomicAdd(&spline_output[out_point_idx * o + i], result[basestart + j] * spline_weights[sw_start * b + j] + activated_feature * base_weights[sw_start]);
-                }
-            }
-            
-            // basestart to basestart + b for bases
-            // do this here
-            break;
+                (grid[gridstart + c + i + 1] - grid[gridstart + 1 + i]) * bases[basestart + i + 1]);
         }
         
         //#pragma unroll
@@ -99,32 +77,41 @@ __global__ void basis_cuda_forward_kernel(int n, int m, int g, int k, int s,
             bases[basestart + i] = result[basestart + i];
         }
     }
+
+    /* Loop for spline output */
+    for (int i = 0; i < o; i++) { // increment output dimension
+        int sw_start = kernel_idx * o * m + i * m + feature_idx;
+        float temp = activated_feature * base_weights[sw_start];
+        //atomicAdd(&spline_output[out_point_idx * o + i], activated_feature * base_weights[sw_start]);
+        for (int j = 0; j < b; j++) {
+            // if (out_point_idx >= num_out) {
+            //     *status = out_point_idx;
+            //     return;
+            // }
+            //atomicExch(last_base, basestart + j);
+            temp = temp + result[basestart + j] * spline_weights[sw_start * b + j];
+            //atomicAdd(&spline_output[out_point_idx * o + i], result[basestart + j] * spline_weights[sw_start * b + j]);
+        }
+        atomicAdd(&spline_output[out_point_idx * o + i], temp);
+    }
 }
 
 void basis_cuda_forward(int n, int m, int g, int k, int s, int p, const float * __restrict__ grid, 
-                        const float * __restrict__ features, float * bases, 
+                        const float * __restrict__ features, float * __restrict__ bases, 
                         const int * __restrict__ kernel_indices, const int * __restrict__ inp_idx, 
-                        float * result, const int * __restrict__ out_idx, const float * __restrict__ activated_features,
+                        float * __restrict__ result, const int * __restrict__ out_idx, const float * __restrict__ activated_features,
                         const float * __restrict__ spline_weights, const float * __restrict__ base_weights,
-                        float * spline_output, int o, int b, int num_out) {
-    float * __restrict__ d_grid;
-    float * __restrict__ d_features;
+                        float * __restrict__ spline_output, int o, int b, int num_out) {
+
     float * d_bases;
     int * __restrict__ d_kernel_indices;
     int * __restrict__ d_inp_idx;
     float * d_result;
     int * __restrict__ d_out_idx;
-    float * __restrict__ d_activated_features;
-    float * __restrict__ d_spline_weights;
-    float * __restrict__ d_base_weights;
     float * d_spline_output;
 
     cudaError_t err;
 
-    err = cudaMalloc((void**)&d_grid, k * m * g * sizeof(float));
-        if (err != cudaSuccess) {std::cout << "cudaMalloc d_grid failed: " << cudaGetErrorString(err) << std::endl; return;}
-    err = cudaMalloc((void**)&d_features, p * m * sizeof(float));
-        if (err != cudaSuccess) {std::cout << "cudaMalloc d_features failed: " << cudaGetErrorString(err) << std::endl; return;}
     err=cudaMalloc((void**)&d_bases, n * m * g * sizeof(float));
         if (err != cudaSuccess) {std::cout << "cudaMalloc d_bases failed: " << cudaGetErrorString(err) << std::endl; return;}
     err=cudaMalloc((void**)&d_kernel_indices, n * sizeof(int));
@@ -135,51 +122,34 @@ void basis_cuda_forward(int n, int m, int g, int k, int s, int p, const float * 
         if (err != cudaSuccess) {std::cout << "cudaMalloc d_result failed: " << cudaGetErrorString(err) << std::endl; return;}
     err=cudaMalloc((void**)&d_out_idx, n * sizeof(int));
         if (err != cudaSuccess) {std::cout << "cudaMalloc d_out_idx failed: " << cudaGetErrorString(err) << std::endl; return;}
-    err=cudaMalloc((void**)&d_activated_features, p * m * sizeof(float));
-        if (err != cudaSuccess) {std::cout << "cudaMalloc d_activated_features failed: " << cudaGetErrorString(err) << std::endl; return;}
-    err=cudaMalloc((void**)&d_spline_weights, k * o * m * b * sizeof(float));
-        if (err != cudaSuccess) {std::cout << "cudaMalloc d_spline_weights failed: " << cudaGetErrorString(err) << std::endl; return;}
-    err=cudaMalloc((void**)&d_base_weights, k * o * m * sizeof(float));
-        if (err != cudaSuccess) {std::cout << "cudaMalloc d_base_weights failed: " << cudaGetErrorString(err) << std::endl; return;}
     err=cudaMalloc((void**)&d_spline_output, num_out * o * sizeof(float));
         if (err != cudaSuccess) {std::cout << "cudaMalloc d_spline_output failed: " << cudaGetErrorString(err) << std::endl; return;}
-
-    cudaMemcpy(d_grid, grid, k * m * g * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_features, features, p * m * sizeof(float), cudaMemcpyHostToDevice);
+    
     cudaMemcpy(d_bases, bases, n * m * g * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_kernel_indices, kernel_indices, n * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_inp_idx, inp_idx, n * sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_result, result, n * m * g * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_out_idx, out_idx, n * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_activated_features, activated_features, p * m * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_spline_weights, spline_weights, k * o * m * b * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_base_weights, base_weights, k * o * m * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_spline_output, spline_output, num_out * o * sizeof(float), cudaMemcpyHostToDevice);
 
     int blockSize = 1024; // how many threads per block
     int gridSize = (n * m + blockSize - 1) / blockSize; // how many blocks
-
-    basis_cuda_forward_kernel<<<gridSize, blockSize>>>(n, m, g, k, s, d_grid, d_features, d_bases, 
+    basis_cuda_forward_kernel<<<gridSize, blockSize>>>(n, m, g, k, s, grid, features, d_bases, 
                                                         d_kernel_indices, d_inp_idx, d_result, d_out_idx,
-                                                        d_activated_features, d_spline_weights, d_base_weights, 
+                                                        activated_features, spline_weights, base_weights, 
                                                         d_spline_output, o, b, num_out);
 
     err = cudaGetLastError();
     if (err != cudaSuccess) {std::cout << "basis_cuda_forward_kernel launch failed: " << cudaGetErrorString(err) << std::endl; return;}
 
-    cudaMemcpy(result, d_result, n * m * g * sizeof(float), cudaMemcpyDeviceToHost);
+    //cudaMemcpy(result, d_result, n * m * g * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(spline_output, d_spline_output, num_out * o * sizeof(float), cudaMemcpyDeviceToHost);
-    //cudaMemcpy(last_base, d_last_base, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaFree(d_grid);
-    cudaFree(d_features);
+
     cudaFree(d_bases);
     cudaFree(d_kernel_indices);
     cudaFree(d_inp_idx);
     cudaFree(d_result);
     cudaFree(d_out_idx);
-    cudaFree(d_activated_features);
-    cudaFree(d_spline_weights);
-    cudaFree(d_base_weights);
     cudaFree(d_spline_output);
 
     cudaDeviceSynchronize();
