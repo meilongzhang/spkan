@@ -41,6 +41,63 @@ else:
     __PYTHON38__ = True
 
 
+class SparseKANFunction(torch.autograd.Function):
+     @staticmethod
+     def forward(
+            ctx,
+            features: torch.Tensor,
+            grid: torch.Tensor,
+            indice_pairs: torch.Tensor,
+            indice_pair_num: torch.Tensor,
+            num_grid: int,
+            num_kernel_elems: int,
+            spline_order: int,
+            activated: torch.Tensor,
+            spline_weights: torch.Tensor,
+            base_weights: torch.Tensor,
+            num_out: int,
+        ):          
+
+          out_features, bases, inp_idx, out_idx, kernel_indices = basis_extension.forward(features, grid, 
+                                                                                          indice_pairs,
+                                                                                          indice_pair_num, 
+                                                                                          num_grid, 
+                                                                                          num_kernel_elems,
+                                                                                          spline_order, 
+                                                                                          activated, 
+                                                                                          spline_weights,
+                                                                                          base_weights, 
+                                                                                          num_out)
+
+          ctx.save_for_backward(activated, spline_weights, base_weights, bases, inp_idx, out_idx, kernel_indices)
+          ctx.g = num_grid
+          ctx.k = num_kernel_elems
+          ctx.s = spline_order
+          ctx.num_out = num_out
+          return out_features
+            
+     @staticmethod
+     def backward(
+            ctx,
+            grad_output: torch.Tensor
+        ):
+
+          activated, spline_weights, base_weights, bases, inp_idx, out_idx, kernel_indices = ctx.saved_tensors
+
+          # WHAT IS TRAINABLE? INPUT FEATURES, ACTIVATED_FEATURES, SPLINE_WEIGHTS, BASE_WEIGHTS
+          grad_input_feature, grad_activated, grad_spline_weights, grad_base_weights = basis_extension.backward(ctx.g, ctx.k,
+                                                                                                                ctx.s, ctx.num_out,
+                                                                                                                grad_output, 
+                                                                                                                activated, 
+                                                                                                                spline_weights, 
+                                                                                                                base_weights, 
+                                                                                                                bases, 
+                                                                                                                inp_idx,
+                                                                                                                out_idx, 
+                                                                                                                kernel_indices)
+
+          return grad_input_feature, None, None, None, None, None, None, grad_activated, grad_spline_weights, grad_base_weights, None
+
 class SparseKANBase(SparseModule):
       """
       A pure Pytorch version of SparseKANConv3D. Offers Sparse 3D Convolution with Kolmogorov-Arnold Networks
@@ -118,8 +175,8 @@ class SparseKANBase(SparseModule):
             ).reshape((self.num_kernel_elems,in_channels,-1)).to(device) # 27 kernel locations, 3 input channels, 5 kernels (output channels), 12 bspline parameters
             
             #self.register_buffer("grid", self.grid)
-            self.base_weights = torch.nn.Parameter(torch.Tensor(self.num_kernel_elems, out_channels, in_channels)).to(device)
-            self.spline_weights = torch.nn.Parameter(torch.Tensor(self.num_kernel_elems, out_channels, in_channels * (grid_size + spline_order))).to(device)
+            self.base_weights = torch.nn.Parameter(torch.Tensor(self.num_kernel_elems, out_channels, in_channels), requires_grad=True)
+            self.spline_weights = torch.nn.Parameter(torch.Tensor(self.num_kernel_elems, out_channels, in_channels * (grid_size + spline_order)), requires_grad=True)
             self.scale_base = 1.0
             self.scale_noise = 0.1
             self.scale_spline = 1.0
@@ -231,7 +288,7 @@ class SparseKANBase(SparseModule):
 
       def forward(self, x: SparseConvTensor):
             ## Currently supporting only sparseconv tensors
-            print(f"x features shape: {x.features.shape}")
+            #print(f"x features shape: {x.features.shape}")
             ## Calculate input output pairs
             # for inverse
             if self.inverse:
@@ -298,10 +355,14 @@ class SparseKANBase(SparseModule):
                  ## ONLY SUPPORTED FOR REGULAR CONVOLUTIONS
                  assert self.device == torch.device('cuda')
                  activated = self.base_activation(features)
-                 out_features = basis_extension.forward(features, self.grid, indice_pairs, 
-                                        indice_pair_num, self.grid.size(2), self.num_kernel_elems, 
-                                        self.spline_order, activated, self.spline_weights,
-                                        self.base_weights, outids.size(0))[0]
+                 out_features = SparseKANFunction.apply(features, self.grid, indice_pairs, 
+                                         indice_pair_num, self.grid.size(2), self.num_kernel_elems, 
+                                         self.spline_order, activated, self.spline_weights, 
+                                         self.base_weights, outids.size(0))
+                #  out_features = basis_extension.forward(features, self.grid, indice_pairs, 
+                #                         indice_pair_num, self.grid.size(2), self.num_kernel_elems, 
+                #                         self.spline_order, activated, self.spline_weights,
+                #                         self.base_weights, outids.size(0))[0]
                  #bases = out[0]
                  #out_features = out[1]
                 
@@ -327,7 +388,7 @@ class SparseKANBase(SparseModule):
                         F.linear(self.base_activation(x), self.base_weights[kernel_idx])
                     ).squeeze(0)
 
-            #print(out_features)
+            #print("out features shape", out_features.shape)
             # non_zero_indices = torch.nonzero(out_features)
             # for index in non_zero_indices:
             #     print(f"Index: {index.tolist()}, Value: {out_features[tuple(index)].item()}")
@@ -692,22 +753,60 @@ if __name__ == '__main__':
     features = features_full.to(device)
     indices = indices_full.to(device)
     test_sparse = SparseConvTensor(features, indices, spatial_shape, batch_size)
-    torch.manual_seed(0)
-    
-    kan_conv_loop = SparseKANConv3d(3, 128, device=device, indice_key='kconv1', use_numba=False)
+
+    ## EVALUATING CUDA AND PYTORCH IMPLEMENTATIONS
+
+    assert torch.cuda.is_available(), "CUDA is not available"
+    import torch.optim as optim
+
+    kan_conv_loop = SparseKANConv3d(3, 128, device=device, indice_key='kconv1', use_numba=False).to(device)
+    kan_conv_cuda = SparseKANConv3d(3, 128, device=device, indice_key='conv1c', use_numba=True).to(device)
+    kan_conv_cuda.load_state_dict(kan_conv_loop.state_dict())
+
+    optimizer_loop = optim.SGD(kan_conv_loop.parameters(), lr=0.01)
+    optimizer_cuda = optim.SGD(kan_conv_cuda.parameters(), lr=0.01)
+
+    for _ in range(5):
+        # Run both implementations here without timing
+        out_loop = kan_conv_loop(test_sparse)
+        out_cuda = kan_conv_cuda(test_sparse)
+
     # Perform a forward pass
+    torch.cuda.synchronize()
     start = time.time()
-    out = kan_conv_loop(test_sparse)
+    out_loop = kan_conv_loop(test_sparse)
+    torch.cuda.synchronize()
     end = time.time()
     print("loop", end-start)
+
+    torch.cuda.synchronize()
+    start = time.time()
+    out_cuda = kan_conv_cuda(test_sparse)
+    torch.cuda.synchronize()
+    end = time.time()
+    print("cuda", end-start)
+
+    assert torch.allclose(out_loop.features.cpu(), out_cuda.features.cpu(), atol=1e-04), "output features are not equal"
+    test_ground_truth = out_loop.features.new_zeros(out_loop.features.shape)
+
+    loss_loop = F.smooth_l1_loss(out_loop.features, test_ground_truth)
+    loss_cuda = F.smooth_l1_loss(out_cuda.features, test_ground_truth)
+    optimizer_loop.zero_grad()
+    optimizer_cuda.zero_grad()
+    loss_loop.backward()
+    loss_cuda.backward()
+
+    for (name_loop, param_loop), (name_cuda, param_cuda) in zip(kan_conv_loop.named_parameters(), kan_conv_cuda.named_parameters()):
+        assert torch.allclose(param_loop.grad, param_cuda.grad, atol=1e-6), f"{name_loop} and {name_cuda} gradients do not match"
+
+    optimizer_loop.step()
+    optimizer_cuda.step()
+
+    for (name_loop, param_loop), (name_cuda, param_cuda) in zip(kan_conv_loop.named_parameters(), kan_conv_cuda.named_parameters()):
+        assert torch.allclose(param_loop, param_cuda, atol=1e-6), f"{name_loop} and {name_cuda} weights do not match after step"
     
-    torch.manual_seed(0)
-    
-    if torch.cuda.is_available():
-        kan_conv_cuda = SparseKANConv3d(3, 128, device=device, indice_key='conv1c', use_numba=True)
-        start = time.time()
-        out = kan_conv_cuda(test_sparse)
-        end = time.time()
-        print("cuda", end-start)
+
+
+
 
     
