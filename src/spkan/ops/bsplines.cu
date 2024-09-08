@@ -144,26 +144,25 @@ __global__ void basis_cuda_backward_kernel(int n, int m, int g, int k, int s, in
     float activated_feature = activated[point_idx * m + feature_idx]; // which activated feature
 
     int grad_output_start = out_point_idx * o; // o output dimensions
-    int grad_input_feature_start = point_idx * m; // m input dimensions
+    //int grad_input_feature_start = point_idx * m; // m input dimensions
 
     for (int i = 0; i < o; i++) { // iterate for output dimension
         int sw_start = kernel_idx * o * m + i * m + feature_idx;
         //float grad_activated_temp = grad_output[grad_output_start + i] * base_weights[sw_start];
-        float grad_base_weights_temp = grad_output[grad_output_start + i] * activated_feature;
+        //float grad_base_weights_temp = grad_output[grad_output_start + i] * activated_feature;
         
-        atomicAdd(&grad_activated[point_idx * m + feature_idx], grad_output[grad_output_start + i] * base_weights[sw_start]);
+        //atomicAdd(&grad_activated[point_idx * m + feature_idx], grad_output[grad_output_start + i] * base_weights[sw_start]);
         
-        atomicAdd(&grad_base_weights[sw_start], grad_base_weights_temp);
-         // should I be using addition or multiplication here?
+        atomicAdd(&grad_base_weights[sw_start], grad_output[grad_output_start + i] * activated_feature);
 
-        float grad_input_feature_temp = 0;
+        //float grad_spline_weights_temp = 0;
 
         for (int j = 0; j < b; j++) {
-            grad_input_feature_temp = grad_input_feature_temp + grad_output[grad_output_start + i] * spline_weights[sw_start * b + j];
+            //grad_input_feature_temp = grad_input_feature_temp + grad_output[grad_output_start + i] * spline_weights[sw_start * b + j];
             atomicAdd(&grad_spline_weights[sw_start * b + j], grad_output[grad_output_start + i] * bases[operation_idx * m * g + feature_idx * g + j]);
         }
 
-        atomicAdd(&grad_input_feature[grad_input_feature_start + feature_idx], grad_input_feature_temp);
+        // atomicAdd(&grad_input_feature[grad_input_feature_start + feature_idx], grad_input_feature_temp);
         
     }
 }

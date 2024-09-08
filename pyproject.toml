@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spkan"
-version = "0.0.2a3"
+version = "0.0.2a4"
 authors = [
   { name="Mellon M. Zhang", email="meilongz@gatech.edu" },
 ]
