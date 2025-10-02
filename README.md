@@ -31,3 +31,6 @@ Use python==3.9 torch>=2.3.0 and spconv-cu118
 ```bash
 git clone https://github.com/meilongzhang/spkan.git
 ```
+
+# If this repo is helpful to you, please cite it:
+[![DOI](https://zenodo.org/badge/827156508.svg)](https://doi.org/10.5281/zenodo.17253152)
